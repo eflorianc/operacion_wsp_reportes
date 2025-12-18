@@ -332,11 +332,6 @@ function extraerTodosLosRangos() {
   // Mostrar progreso
   ss.toast('Extrayendo datos de todos los rangos...', '⏳ Procesando', -1);
 
-  // Obtener compras agrupadas por AD ID (solo una vez, para todos los rangos)
-  ss.toast('Obteniendo compras de spreadsheets...', '⏳ Procesando', -1);
-  const comprasPorAdId = obtenerComprasPorAdId(filtroPais);
-  Logger.log(`Compras encontradas para ${Object.keys(comprasPorAdId).length} AD IDs`);
-
   rangos.forEach((rangoConfig, index) => {
     ss.toast(`Extrayendo: ${rangoConfig.nombre} (${index + 1}/${rangos.length})`, '⏳ Procesando', -1);
     totalPorRango[rangoConfig.nombre] = 0;
@@ -344,6 +339,11 @@ function extraerTodosLosRangos() {
       filas: [],
       totales: { gasto: 0, igv: 0, gastoTotal: 0, alcance: 0, clics: 0, factUSD: 0, numVentas: 0, utilidad: 0, impresiones: 0 }
     };
+
+    // Calcular fechas del rango y obtener compras filtradas por ese rango
+    const fechasRango = calcularFechasDeRango(rangoConfig.nombre, ss.getSpreadsheetTimeZone());
+    const comprasPorAdId = obtenerComprasPorAdId(filtroPais, fechasRango.inicio, fechasRango.fin);
+    Logger.log(`${rangoConfig.nombre}: Compras encontradas para ${Object.keys(comprasPorAdId).length} AD IDs`);
 
     cuentas.forEach(cuenta => {
       try {
@@ -365,14 +365,14 @@ function extraerTodosLosRangos() {
           const impresiones = parseInt(item.impressions) || 0;
           const cpm = impresiones > 0 ? (gasto / impresiones) * 1000 : 0;
 
-          // Buscar facturación por AD ID (solo para MAXIMUM/lifetime)
+          // Buscar facturación por AD ID para este rango
           const adId = item.ad_id || '';
           let factUSD = 0;
           let numVentas = 0;
           let tasaCambio = '';
 
-          // Solo vincular compras con el rango MAXIMUM (lifetime)
-          if (rangoConfig.nombre === 'MAXIMUM' && adId && comprasPorAdId[adId]) {
+          // Vincular compras del rango actual
+          if (adId && comprasPorAdId[adId]) {
             const compra = comprasPorAdId[adId];
             factUSD = compra.totalUSD;
             numVentas = compra.cantidadVentas;
@@ -643,15 +643,18 @@ function extraerUltimos5Dias() {
  * Obtiene todas las compras de los spreadsheets vinculados
  * Agrupa por AD ID (POST ID sin "Ads-") y convierte a USD con tasa actual
  * @param {string} filtroPais - Filtro opcional de país (lowercase)
+ * @param {Date} fechaInicio - Fecha de inicio para filtrar compras (opcional)
+ * @param {Date} fechaFin - Fecha de fin para filtrar compras (opcional)
  * @returns {Object} - Mapa de adId -> { totalUSD, totalLocal, moneda, tasa, cantidadVentas }
  */
-function obtenerComprasPorAdId(filtroPais) {
+function obtenerComprasPorAdId(filtroPais, fechaInicio, fechaFin) {
   const config = obtenerConfiguracion();
   const hojas = config.VENTAS_BOT.HOJAS;
   const mapaMonedas = config.MONEDAS_PAIS;
   const tasasActuales = obtenerTasasDeCambio();
 
   // Columnas de la hoja Compras
+  const COL_FECHA = 3;      // Columna C - Fecha
   const COL_VALOR = 4;      // Columna D - Valor
   const COL_POST_ID = 5;    // Columna E - POST ID
   const COL_PAIS = 11;      // Columna K - País
@@ -690,6 +693,7 @@ function obtenerComprasPorAdId(filtroPais) {
       datos.forEach((fila, idx) => {
         totalRegistrosLeidos++;
 
+        const fechaCompra = fila[COL_FECHA - 1];
         const valorLocal = parseFloat(fila[COL_VALOR - 1]) || 0;
         const postIdRaw = fila[COL_POST_ID - 1];
         const paisRaw = fila[COL_PAIS - 1];
@@ -698,6 +702,14 @@ function obtenerComprasPorAdId(filtroPais) {
         if (!postIdRaw) {
           registrosSinPostId++;
           return;
+        }
+
+        // Filtrar por rango de fechas si se especificó
+        if (fechaInicio && fechaFin && fechaCompra) {
+          const fechaCompraDate = new Date(fechaCompra);
+          if (fechaCompraDate < fechaInicio || fechaCompraDate > fechaFin) {
+            return; // Saltar esta compra si está fuera del rango
+          }
         }
 
         // Extraer AD ID: quitar "Ads-" del POST ID
