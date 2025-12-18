@@ -1,0 +1,13 @@
+# Archivos de configuración local
+.clasprc.json
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Archivos temporales
+*.tmp
+~$*
