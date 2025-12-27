@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(clasp login:*)",
+      "Bash(clasp list:*)",
+      "Bash(clasp push:*)"
+    ]
+  }
+}

@@ -712,12 +712,20 @@ function obtenerComprasPorAdId(filtroPais, fechaInicio, fechaFin) {
           }
         }
 
-        // Extraer AD ID: quitar "Ads-" del POST ID
+        // Extraer AD ID del POST ID (puede venir como "Ads-123456" o solo "123456")
         const postIdStr = postIdRaw.toString().trim();
-        // Quitar cualquier prefijo "Ads-" o "ads-" o similar
-        const adId = postIdStr.replace(/^Ads[-_]?/i, '').trim();
 
+        // Quitar cualquier prefijo "Ads-", "ads-", "ADS-", "Ads_", etc.
+        // El regex elimina: "Ads" (case insensitive) + opcional guión/guión bajo/espacio
+        let adId = postIdStr.replace(/^ads[\s\-_]*/i, '').trim();
+
+        // Si después de quitar el prefijo no queda nada, usar el original
         if (!adId) {
+          adId = postIdStr;
+        }
+
+        // Validar que tengamos un AD ID
+        if (!adId || adId === '') {
           registrosSinPostId++;
           return;
         }
@@ -774,6 +782,300 @@ function obtenerComprasPorAdId(filtroPais, fechaInicio, fechaFin) {
 }
 
 /**
+ * Diagnóstico completo de extracción de rangos
+ * Muestra qué compras se están matcheando para MAXIMUM
+ */
+function diagnosticarExtraccionRangos() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  try {
+    // Calcular fechas del rango MAXIMUM
+    const fechasRango = calcularFechasDeRango('MAXIMUM', ss.getSpreadsheetTimeZone());
+
+    Logger.log('=== DIAGNÓSTICO EXTRACCIÓN RANGOS ===');
+    Logger.log(`Rango MAXIMUM: ${fechasRango.inicio} a ${fechasRango.fin}`);
+
+    // Obtener compras sin filtro de país
+    const comprasPorAdId = obtenerComprasPorAdId('', fechasRango.inicio, fechasRango.fin);
+
+    let mensaje = '🔍 DIAGNÓSTICO EXTRACCIÓN RANGOS (MAXIMUM)\n\n';
+    mensaje += `📅 Rango de fechas:\n`;
+    mensaje += `  Inicio: ${fechasRango.inicio.toLocaleDateString()}\n`;
+    mensaje += `  Fin: ${fechasRango.fin.toLocaleDateString()}\n\n`;
+    mensaje += `📊 Total AD IDs encontrados: ${Object.keys(comprasPorAdId).length}\n\n`;
+
+    // Mostrar totales por país
+    const totalesPorPais = {};
+    let totalUSDGlobal = 0;
+
+    for (const adId in comprasPorAdId) {
+      const compra = comprasPorAdId[adId];
+      const pais = compra.pais || 'SIN PAÍS';
+
+      if (!totalesPorPais[pais]) {
+        totalesPorPais[pais] = {
+          totalUSD: 0,
+          totalLocal: 0,
+          moneda: compra.moneda,
+          ventas: 0
+        };
+      }
+
+      totalesPorPais[pais].totalUSD += compra.totalUSD;
+      totalesPorPais[pais].totalLocal += compra.totalLocal;
+      totalesPorPais[pais].ventas += compra.cantidadVentas;
+      totalUSDGlobal += compra.totalUSD;
+    }
+
+    mensaje += '💰 TOTALES POR PAÍS:\n';
+    mensaje += '━'.repeat(50) + '\n';
+
+    for (const pais in totalesPorPais) {
+      const datos = totalesPorPais[pais];
+      mensaje += `\n${pais}:\n`;
+      mensaje += `  Ventas: ${datos.ventas}\n`;
+      mensaje += `  Total Local: ${datos.totalLocal.toFixed(2)} ${datos.moneda}\n`;
+      mensaje += `  Total USD: $${datos.totalUSD.toFixed(2)}\n`;
+    }
+
+    mensaje += '\n' + '━'.repeat(50) + '\n';
+    mensaje += `\n💵 TOTAL USD GLOBAL: $${totalUSDGlobal.toFixed(2)}\n\n`;
+
+    // Mostrar primeros 10 AD IDs
+    mensaje += '📋 PRIMEROS 10 AD IDs CON VENTAS:\n';
+    mensaje += '━'.repeat(50) + '\n';
+
+    const adIds = Object.keys(comprasPorAdId).slice(0, 10);
+    adIds.forEach((adId, i) => {
+      const compra = comprasPorAdId[adId];
+      mensaje += `\n${i + 1}. AD ID: "${adId}"\n`;
+      mensaje += `   País: ${compra.pais}\n`;
+      mensaje += `   Ventas: ${compra.cantidadVentas}\n`;
+      mensaje += `   Total: ${compra.totalLocal.toFixed(2)} ${compra.moneda}\n`;
+      mensaje += `   Tasa: ${compra.tasa.toFixed(2)}\n`;
+      mensaje += `   USD: $${compra.totalUSD.toFixed(2)}\n`;
+    });
+
+    // Información adicional sobre POST IDs
+    mensaje += '\n\n📝 NOTA IMPORTANTE:\n';
+    mensaje += '━'.repeat(50) + '\n';
+    mensaje += 'Los POST IDs del spreadsheet se limpian así:\n';
+    mensaje += '• "Ads-123456789" → "123456789"\n';
+    mensaje += '• "ads-123456789" → "123456789"\n';
+    mensaje += '• "123456789" → "123456789"\n';
+    mensaje += '\nEstos AD IDs se matchean con los de Meta Ads.';
+
+    Logger.log(mensaje);
+    ui.alert(
+      '✅ Diagnóstico Completo',
+      `Revisa el Log (Extensiones > Apps Script > Ver registros)\n\n` +
+      `Resumen:\n` +
+      `• Total AD IDs: ${Object.keys(comprasPorAdId).length}\n` +
+      `• Total USD: $${totalUSDGlobal.toFixed(2)}\n\n` +
+      `Ver log para detalle completo.`,
+      ui.ButtonSet.OK
+    );
+
+  } catch (e) {
+    ui.alert('Error', e.message + '\n' + e.stack, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Diagnóstico completo de por qué un AD ID no aparece en el reporte
+ */
+function diagnosticarAdIdCompleto() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const resp = ui.prompt(
+    '🔍 Diagnóstico Completo AD ID',
+    'Ingresa el AD ID que NO aparece en "Todos los Rangos":',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (resp.getSelectedButton() !== ui.Button.OK) return;
+
+  const adIdBuscado = resp.getResponseText().trim();
+  if (!adIdBuscado) {
+    ui.alert('Error', 'Debes ingresar un AD ID', ui.ButtonSet.OK);
+    return;
+  }
+
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const token = props.getProperty('META_TOKEN');
+    const cuentas = JSON.parse(props.getProperty('META_CUENTAS') || '[]');
+
+    let mensaje = `🔍 DIAGNÓSTICO COMPLETO AD ID: ${adIdBuscado}\n\n`;
+    mensaje += '━'.repeat(60) + '\n\n';
+
+    // PASO 1: Verificar en spreadsheet de ventas
+    mensaje += '📋 PASO 1: BUSCAR EN SPREADSHEET DE VENTAS\n\n';
+
+    const config = obtenerConfiguracion();
+    const hojas = config.VENTAS_BOT.HOJAS;
+    const COL_VALOR = 4;
+    const COL_POST_ID = 5;
+    const COL_PAIS = 11;
+
+    let ventasEncontradas = [];
+    let totalVentasSpreadsheet = 0;
+    let totalUSDSpreadsheet = 0;
+
+    hojas.forEach(hojaObj => {
+      const id = hojaObj.id || hojaObj;
+      try {
+        const ssVentas = SpreadsheetApp.openById(id);
+        const hoja = ssVentas.getSheetByName('Compras');
+        if (!hoja) return;
+
+        const lastRow = hoja.getLastRow();
+        if (lastRow < 2) return;
+
+        const datos = hoja.getRange(2, 1, lastRow - 1, COL_PAIS).getValues();
+
+        datos.forEach((fila, idx) => {
+          const postIdRaw = fila[COL_POST_ID - 1];
+          if (!postIdRaw) return;
+
+          const postIdStr = postIdRaw.toString().trim();
+          let adId = postIdStr.replace(/^ads[\s\-_]*/i, '').trim();
+          if (!adId) adId = postIdStr;
+
+          if (adId === adIdBuscado || postIdStr.includes(adIdBuscado)) {
+            const nombre = fila[1];
+            const valor = parseFloat(fila[COL_VALOR - 1]) || 0;
+            const pais = fila[COL_PAIS - 1];
+
+            ventasEncontradas.push({
+              fila: idx + 2,
+              nombre: nombre,
+              postId: postIdStr,
+              adId: adId,
+              valor: valor,
+              pais: pais
+            });
+
+            totalVentasSpreadsheet++;
+            totalUSDSpreadsheet += valor;
+          }
+        });
+      } catch (error) {
+        Logger.log(`Error leyendo spreadsheet ${id}: ${error.message}`);
+      }
+    });
+
+    if (ventasEncontradas.length > 0) {
+      mensaje += `✅ ENCONTRADO en spreadsheet de ventas\n\n`;
+      mensaje += `Total de ventas: ${ventasEncontradas.length}\n`;
+      mensaje += `Total valor: ${totalUSDSpreadsheet.toFixed(2)}\n\n`;
+      mensaje += 'Detalle de ventas:\n';
+      ventasEncontradas.forEach((v, i) => {
+        mensaje += `${i + 1}. Fila ${v.fila}: "${v.nombre}"\n`;
+        mensaje += `   POST_ID: "${v.postId}" → AD_ID: "${v.adId}"\n`;
+        mensaje += `   Valor: ${v.valor.toFixed(2)} | País: ${v.pais}\n\n`;
+      });
+    } else {
+      mensaje += `❌ NO ENCONTRADO en spreadsheet de ventas\n\n`;
+    }
+
+    mensaje += '━'.repeat(60) + '\n\n';
+
+    // PASO 2: Verificar en Meta Ads API
+    mensaje += '📡 PASO 2: BUSCAR EN META ADS API (RANGO MAXIMUM)\n\n';
+
+    let encontradoEnMeta = false;
+    let datosMeta = null;
+
+    if (token && cuentas.length > 0) {
+      for (const cuenta of cuentas) {
+        try {
+          const url = `https://graph.facebook.com/v21.0/${cuenta[0]}/ads?fields=id,name,adset_id,campaign_id,effective_status&date_preset=maximum&access_token=${token}&limit=1000`;
+          const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+          const result = JSON.parse(response.getContentText());
+
+          if (result.data) {
+            for (const ad of result.data) {
+              if (ad.id === adIdBuscado) {
+                encontradoEnMeta = true;
+                datosMeta = ad;
+                break;
+              }
+            }
+          }
+
+          if (encontradoEnMeta) break;
+        } catch (e) {
+          mensaje += `Error consultando cuenta ${cuenta[0]}: ${e.message}\n`;
+        }
+      }
+
+      if (encontradoEnMeta) {
+        mensaje += `✅ ENCONTRADO en Meta Ads API\n\n`;
+        mensaje += `AD ID: ${datosMeta.id}\n`;
+        mensaje += `Nombre: ${datosMeta.name}\n`;
+        mensaje += `Estado: ${datosMeta.effective_status}\n`;
+        mensaje += `Campaign ID: ${datosMeta.campaign_id}\n`;
+        mensaje += `AdSet ID: ${datosMeta.adset_id}\n\n`;
+      } else {
+        mensaje += `❌ NO ENCONTRADO en Meta Ads API (rango MAXIMUM)\n\n`;
+        mensaje += `⚠️ POSIBLES CAUSAS:\n`;
+        mensaje += `• El anuncio fue eliminado de Meta Ads\n`;
+        mensaje += `• El anuncio pertenece a otra cuenta publicitaria\n`;
+        mensaje += `• El anuncio está fuera del rango MAXIMUM de Meta\n`;
+        mensaje += `• El AD ID es incorrecto\n\n`;
+      }
+    } else {
+      mensaje += `⚠️ No se pudo verificar en Meta Ads (falta token o cuentas)\n\n`;
+    }
+
+    mensaje += '━'.repeat(60) + '\n\n';
+
+    // CONCLUSIÓN
+    mensaje += '🎯 CONCLUSIÓN:\n\n';
+
+    if (ventasEncontradas.length > 0 && encontradoEnMeta) {
+      mensaje += `✅ El AD ID existe en ambos lados (spreadsheet y Meta Ads)\n`;
+      mensaje += `   Debería aparecer en "Todos los Rangos"\n\n`;
+      mensaje += `⚠️ Si NO aparece, el problema puede ser:\n`;
+      mensaje += `   • Filtro de país aplicado\n`;
+      mensaje += `   • Filtro de producto aplicado\n`;
+      mensaje += `   • Error en la consulta de insights de Meta Ads\n`;
+    } else if (ventasEncontradas.length > 0 && !encontradoEnMeta) {
+      mensaje += `⚠️ El AD ID existe en spreadsheet pero NO en Meta Ads\n`;
+      mensaje += `   El anuncio fue eliminado o no está disponible\n`;
+      mensaje += `   Por eso NO aparece en "Todos los Rangos"\n`;
+    } else if (ventasEncontradas.length === 0 && encontradoEnMeta) {
+      mensaje += `⚠️ El AD ID existe en Meta Ads pero NO tiene ventas\n`;
+      mensaje += `   Verificar que el POST ID en el spreadsheet sea correcto\n`;
+    } else {
+      mensaje += `❌ El AD ID NO existe en ningún lado\n`;
+      mensaje += `   Verificar que el AD ID sea correcto\n`;
+    }
+
+    Logger.log(mensaje);
+
+    // Mensaje corto para alert
+    let alertMsg = `AD ID: ${adIdBuscado}\n\n`;
+    alertMsg += `Spreadsheet: ${ventasEncontradas.length > 0 ? '✅ Encontrado' : '❌ No encontrado'}\n`;
+    alertMsg += `Meta Ads: ${encontradoEnMeta ? '✅ Encontrado' : '❌ No encontrado'}\n\n`;
+
+    if (ventasEncontradas.length > 0) {
+      alertMsg += `Ventas: ${ventasEncontradas.length}\n`;
+      alertMsg += `Total: ${totalUSDSpreadsheet.toFixed(2)}\n\n`;
+    }
+
+    alertMsg += 'Ver log completo: Extensiones > Apps Script > Ver registros';
+
+    ui.alert('🔍 Diagnóstico Completo', alertMsg, ui.ButtonSet.OK);
+
+  } catch (e) {
+    ui.alert('Error', e.message + '\n' + e.stack, ui.ButtonSet.OK);
+  }
+}
+
+/**
  * Función de diagnóstico para verificar compras de un AD ID específico
  * Ejecutar desde el editor de Apps Script
  */
@@ -817,10 +1119,12 @@ function diagnosticarAdId() {
         if (!postIdRaw) return;
 
         const postIdStr = postIdRaw.toString().trim();
-        const adId = postIdStr.replace(/^Ads[-_]?/i, '').trim();
+        // Usar el mismo regex mejorado que en obtenerComprasPorAdId
+        let adId = postIdStr.replace(/^ads[\s\-_]*/i, '').trim();
+        if (!adId) adId = postIdStr;
 
         // Buscar coincidencia exacta o parcial
-        if (adId === adIdBuscado || postIdStr.includes(adIdBuscado)) {
+        if (adId === adIdBuscado || postIdStr.includes(adIdBuscado) || adId.includes(adIdBuscado)) {
           totalEncontradas++;
           const nombre = fila[1];  // Columna B - Nombre
           const valor = fila[COL_VALOR - 1];

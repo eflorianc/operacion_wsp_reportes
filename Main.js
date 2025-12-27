@@ -17,7 +17,22 @@ function onOpen() {
     .addSeparator()
     .addItem('🎨 Panel de Creativos (Ad-Level)', 'runCreativeAnalysis') // Llama a la nueva función
     // --------------------------------------------------------
-    
+    .addSeparator()
+    .addSubMenu(ui.createMenu('🔍 Diagnósticos')
+      .addItem('🛒 Consultar Ventas por Producto', 'consultarVentasPorProducto')
+      .addSeparator()
+      .addItem('📊 Matching de Ventas', 'diagnosticarMatchingVentas')
+      .addItem('📈 Extracción de Rangos', 'diagnosticarExtraccionRangos')
+      .addSeparator()
+      .addItem('🆔 Buscar AD ID Específico', 'diagnosticarAdId')
+      .addItem('🔬 Diagnóstico Completo AD ID', 'diagnosticarAdIdCompleto'))
+    .addSeparator()
+    .addSubMenu(ui.createMenu('📲 Creador de Campañas WhatsApp')
+      .addItem('📋 Crear Hoja de Configuración', 'crearHojaCampanas')
+      .addItem('📄 Obtener Page ID de Facebook', 'mostrarPageIDsDisponibles')
+      .addItem('✅ Validar Page ID', 'validarPageID')
+      .addSeparator()
+      .addItem('▶️ Crear Campaña', 'crearCampanaWhatsApp'))
     .addSeparator()
     .addSubMenu(ui.createMenu('⚙️ Configuración')
       .addItem('🔑 Configurar Token de Meta', 'configurarToken')

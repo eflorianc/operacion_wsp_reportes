@@ -156,8 +156,8 @@ function calcularFechasDeRango(rango, timezone) {
       break;
     case 'MAXIMUM':
     default:
-      // Para MAXIMUM, usamos los últimos 365 días como referencia
-      fin = new Date(ayer.getFullYear(), ayer.getMonth(), ayer.getDate(), 23, 59, 59);
+      // MAXIMUM va desde 2020 hasta AHORA (incluye hoy)
+      fin = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59);
       inicio = new Date(2020, 0, 1); // Desde 2020
       break;
   }
