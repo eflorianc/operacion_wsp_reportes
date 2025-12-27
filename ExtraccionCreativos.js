@@ -199,7 +199,7 @@ function construirTimeRange(dias, timezone) {
  */
 function extraerDatosDeCuenta(accountId, token, timeParam, filtroProducto) {
   const campos = 'campaign_name,adset_name,ad_name,ad_id,spend,impressions,reach,clicks';
-  const url = `https://graph.facebook.com/v21.0/${accountId}/insights?level=ad&fields=${campos}&${timeParam}&limit=500&access_token=${token}`;
+  const url = `https://graph.facebook.com/v22.0/${accountId}/insights?level=ad&fields=${campos}&${timeParam}&limit=500&access_token=${token}`;
 
   const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
   const responseCode = response.getResponseCode();
@@ -236,6 +236,253 @@ function extraerDatosDeCuenta(accountId, token, timeParam, filtroProducto) {
   }
 
   return datos;
+}
+
+/**
+ * Extrae datos completos de cuenta incluyendo estados y presupuestos
+ * OPTIMIZADO: Usa Batch API de Facebook, país desde configuración
+ * @param {string} accountId - ID de cuenta publicitaria
+ * @param {string} token - Token de acceso
+ * @param {string} timeParam - Parámetro de tiempo formateado
+ * @param {string} filtroProducto - Filtro opcional por nombre de producto
+ * @returns {Array} - Array de objetos con datos completos de anuncios
+ */
+function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProducto) {
+  // Obtener configuración para mapear países
+  const config = obtenerConfiguracion();
+  const monedasPais = config.MONEDAS_PAIS;
+  const paisesConocidos = Object.keys(monedasPais);
+
+  // Obtener insights básicos - ACTUALIZADO A v22.0
+  const campos = 'campaign_name,adset_name,ad_name,ad_id,campaign_id,adset_id,spend,impressions,reach,clicks';
+  const url = `https://graph.facebook.com/v22.0/${accountId}/insights?level=ad&fields=${campos}&${timeParam}&limit=500&access_token=${token}`;
+
+  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  const responseCode = response.getResponseCode();
+  const responseText = response.getContentText();
+
+  if (responseCode !== 200) {
+    const errorData = JSON.parse(responseText);
+    const errorMsg = errorData.error ? errorData.error.message : 'Error desconocido';
+    throw new Error(errorMsg);
+  }
+
+  const json = JSON.parse(responseText);
+  let datos = json.data || [];
+
+  // Manejar paginación
+  let nextUrl = json.paging && json.paging.next;
+  while (nextUrl) {
+    const nextResponse = UrlFetchApp.fetch(nextUrl, { muteHttpExceptions: true });
+    if (nextResponse.getResponseCode() === 200) {
+      const nextJson = JSON.parse(nextResponse.getContentText());
+      datos = datos.concat(nextJson.data || []);
+      nextUrl = nextJson.paging && nextJson.paging.next;
+    } else {
+      break;
+    }
+  }
+
+  // Filtrar por producto si se especificó
+  if (filtroProducto && filtroProducto.length > 0) {
+    const filtroLower = filtroProducto.toLowerCase();
+    datos = datos.filter(item =>
+      item.campaign_name && item.campaign_name.toLowerCase().includes(filtroLower)
+    );
+  }
+
+  if (datos.length === 0) {
+    return [];
+  }
+
+  // Identificar IDs únicos para evitar consultas duplicadas
+  const adsUnicos = [...new Set(datos.map(d => d.ad_id))];
+  const adsetsUnicos = [...new Set(datos.map(d => d.adset_id))];
+  const campaignsUnicos = [...new Set(datos.map(d => d.campaign_id))];
+
+  // Caches para almacenar los datos
+  const adCache = {};
+  const adsetCache = {};
+  const campaignCache = {};
+
+  // Función para hacer Batch API requests - ACTUALIZADO A v22.0
+  function ejecutarBatch(requests, token) {
+    const batchUrl = 'https://graph.facebook.com/v22.0/';
+    const payload = {
+      access_token: token,
+      batch: JSON.stringify(requests)
+    };
+
+    try {
+      const response = UrlFetchApp.fetch(batchUrl, {
+        method: 'post',
+        payload: payload,
+        muteHttpExceptions: true
+      });
+
+      if (response.getResponseCode() === 200) {
+        const result = JSON.parse(response.getContentText());
+        Logger.log('Batch response sample: ' + JSON.stringify(result[0])); // Debug
+        return result;
+      } else {
+        Logger.log('Error en batch: ' + response.getContentText());
+      }
+    } catch (e) {
+      Logger.log('Error ejecutando batch: ' + e.message);
+    }
+    return [];
+  }
+
+  // Obtener estados de ads en batches de 50
+  for (let i = 0; i < adsUnicos.length; i += 50) {
+    const batch = adsUnicos.slice(i, i + 50);
+    const requests = batch.map(adId => ({
+      method: 'GET',
+      relative_url: `${adId}?fields=effective_status`
+    }));
+
+    const results = ejecutarBatch(requests, token);
+
+    results.forEach((result, idx) => {
+      if (result && result.code === 200) {
+        try {
+          const data = JSON.parse(result.body);
+          const status = data.effective_status || 'UNKNOWN';
+          adCache[batch[idx]] = status;
+          Logger.log(`Ad ${batch[idx]}: ${status}`); // Debug
+        } catch (e) {
+          Logger.log(`Error parsing ad ${batch[idx]}: ${e.message}`);
+          adCache[batch[idx]] = 'UNKNOWN';
+        }
+      } else {
+        Logger.log(`Error en ad ${batch[idx]}: code ${result ? result.code : 'null'}`);
+        adCache[batch[idx]] = 'UNKNOWN';
+      }
+    });
+  }
+
+  // Obtener estados y presupuestos de adsets en batches de 50
+  for (let i = 0; i < adsetsUnicos.length; i += 50) {
+    const batch = adsetsUnicos.slice(i, i + 50);
+    const requests = batch.map(adsetId => ({
+      method: 'GET',
+      relative_url: `${adsetId}?fields=effective_status,daily_budget,lifetime_budget`
+    }));
+
+    const results = ejecutarBatch(requests, token);
+
+    results.forEach((result, idx) => {
+      if (result && result.code === 200) {
+        try {
+          const data = JSON.parse(result.body);
+
+          let presupuesto = 0;
+          if (data.daily_budget) {
+            presupuesto = parseFloat(data.daily_budget) / 100;
+          } else if (data.lifetime_budget) {
+            presupuesto = parseFloat(data.lifetime_budget) / 100;
+          }
+
+          const status = data.effective_status || 'UNKNOWN';
+          adsetCache[batch[idx]] = {
+            status: status,
+            presupuesto: presupuesto
+          };
+          Logger.log(`Adset ${batch[idx]}: ${status}, presupuesto: ${presupuesto}`); // Debug
+        } catch (e) {
+          Logger.log(`Error parsing adset ${batch[idx]}: ${e.message}`);
+          adsetCache[batch[idx]] = { status: 'UNKNOWN', presupuesto: 0 };
+        }
+      } else {
+        Logger.log(`Error en adset ${batch[idx]}: code ${result ? result.code : 'null'}`);
+        adsetCache[batch[idx]] = { status: 'UNKNOWN', presupuesto: 0 };
+      }
+    });
+  }
+
+  // Obtener estados de campaigns en batches de 50
+  for (let i = 0; i < campaignsUnicos.length; i += 50) {
+    const batch = campaignsUnicos.slice(i, i + 50);
+    const requests = batch.map(campaignId => ({
+      method: 'GET',
+      relative_url: `${campaignId}?fields=effective_status`
+    }));
+
+    const results = ejecutarBatch(requests, token);
+
+    results.forEach((result, idx) => {
+      if (result && result.code === 200) {
+        try {
+          const data = JSON.parse(result.body);
+          const status = data.effective_status || 'UNKNOWN';
+          campaignCache[batch[idx]] = status;
+          Logger.log(`Campaign ${batch[idx]}: ${status}`); // Debug
+        } catch (e) {
+          Logger.log(`Error parsing campaign ${batch[idx]}: ${e.message}`);
+          campaignCache[batch[idx]] = 'UNKNOWN';
+        }
+      } else {
+        Logger.log(`Error en campaign ${batch[idx]}: code ${result ? result.code : 'null'}`);
+        campaignCache[batch[idx]] = 'UNKNOWN';
+      }
+    });
+  }
+
+  // Función para extraer país del nombre de campaña
+  function extraerPaisDeCampana(nombreCampana) {
+    if (!nombreCampana) return 'N/A';
+    const nombreUpper = nombreCampana.toUpperCase();
+
+    for (const pais of paisesConocidos) {
+      if (nombreUpper.includes(pais)) {
+        return pais;
+      }
+    }
+    return 'N/A';
+  }
+
+  // Log de diagnóstico de caches
+  Logger.log(`Total en adCache: ${Object.keys(adCache).length}`);
+  Logger.log(`Total en adsetCache: ${Object.keys(adsetCache).length}`);
+  Logger.log(`Total en campaignCache: ${Object.keys(campaignCache).length}`);
+  Logger.log(`Muestra adCache: ${JSON.stringify(Object.keys(adCache).slice(0, 3))}`);
+  Logger.log(`Muestra adsetCache: ${JSON.stringify(Object.keys(adsetCache).slice(0, 3))}`);
+  Logger.log(`Muestra campaignCache: ${JSON.stringify(Object.keys(campaignCache).slice(0, 3))}`);
+
+  // Enriquecer datos usando los caches
+  const datosEnriquecidos = datos.map((item, idx) => {
+    const adStatus = adCache[item.ad_id] || 'UNKNOWN';
+    const adsetData = adsetCache[item.adset_id] || { status: 'UNKNOWN', presupuesto: 0 };
+    const campaignStatus = campaignCache[item.campaign_id] || 'UNKNOWN';
+
+    // Log del primer item para debug
+    if (idx === 0) {
+      Logger.log(`Primer item - Ad ID: ${item.ad_id}, adStatus: ${adStatus}`);
+      Logger.log(`Primer item - Adset ID: ${item.adset_id}, adsetStatus: ${adsetData.status}`);
+      Logger.log(`Primer item - Campaign ID: ${item.campaign_id}, campaignStatus: ${campaignStatus}`);
+    }
+
+    // Extraer país del nombre de la campaña
+    const pais = extraerPaisDeCampana(item.campaign_name);
+
+    // Determinar estado general
+    let estadoGeneral = 'EN PAUSA';
+    if (adStatus === 'ACTIVE' && adsetData.status === 'ACTIVE' && campaignStatus === 'ACTIVE') {
+      estadoGeneral = 'EN CIRCULACIÓN';
+    }
+
+    return {
+      ...item,
+      ad_status: adStatus,
+      adset_status: adsetData.status,
+      campaign_status: campaignStatus,
+      estado_general: estadoGeneral,
+      presupuesto: adsetData.presupuesto,
+      pais: pais
+    };
+  });
+
+  return datosEnriquecidos;
 }
 
 /**
@@ -303,7 +550,7 @@ function extraerTodosLosRangos() {
   }
 
   const headers = [
-    'TIPO', 'RANGO', 'CAMPAÑA', 'CONJUNTO', 'ANUNCIO', 'AD ID',
+    'TIPO', 'RANGO', 'CAMPAÑA', 'CONJUNTO', 'ANUNCIO', 'AD ID', 'PAÍS', 'ESTADO', 'PRESUPUESTO',
     'GASTO', 'IGV', 'GASTO TOTAL', 'FACT USD', 'ROAS', 'UTILIDAD', 'ROI',
     'ALCANCE', 'CLICS', 'CPM', '# VENTAS', 'T.C.', 'IMPRESIONES'
   ];
@@ -311,7 +558,11 @@ function extraerTodosLosRangos() {
       .setValues([headers])
       .setBackground('#9c27b0')
       .setFontColor('white')
-      .setFontWeight('bold');
+      .setFontWeight('bold')
+      .setHorizontalAlignment('center');
+
+  // Fijar la primera fila para que siempre sea visible
+  hoja.setFrozenRows(1);
 
   // Definir los rangos a extraer
   const rangos = [
@@ -337,7 +588,7 @@ function extraerTodosLosRangos() {
     totalPorRango[rangoConfig.nombre] = 0;
     datosPorRango[rangoConfig.nombre] = {
       filas: [],
-      totales: { gasto: 0, igv: 0, gastoTotal: 0, alcance: 0, clics: 0, factUSD: 0, numVentas: 0, utilidad: 0, impresiones: 0 }
+      totales: { gasto: 0, igv: 0, gastoTotal: 0, alcance: 0, clics: 0, factUSD: 0, numVentas: 0, utilidad: 0, impresiones: 0, presupuesto: 0 }
     };
 
     // Calcular fechas del rango y obtener compras filtradas por ese rango
@@ -347,7 +598,8 @@ function extraerTodosLosRangos() {
 
     cuentas.forEach(cuenta => {
       try {
-        let datos = extraerDatosDeCuenta(cuenta[0], token, rangoConfig.param, filtroProducto);
+        // Usar la función completa que obtiene estados y presupuestos
+        let datos = extraerDatosCompletoDeCuenta(cuenta[0], token, rangoConfig.param, filtroProducto);
 
         // Filtrar por país si se seleccionó uno específico
         if (filtroPais) {
@@ -364,6 +616,11 @@ function extraerTodosLosRangos() {
           const clics = parseInt(item.clicks) || 0;
           const impresiones = parseInt(item.impressions) || 0;
           const cpm = impresiones > 0 ? (gasto / impresiones) * 1000 : 0;
+
+          // Obtener datos adicionales del item
+          const estadoGeneral = item.estado_general || 'EN PAUSA';
+          const presupuesto = item.presupuesto || 0;
+          const pais = item.pais || 'N/A';
 
           // Buscar facturación por AD ID para este rango
           const adId = item.ad_id || '';
@@ -390,6 +647,9 @@ function extraerTodosLosRangos() {
             item.adset_name || '',
             item.ad_name || '',
             adId,
+            pais,
+            estadoGeneral,
+            presupuesto,
             gasto,
             igv,
             gastoTotal,
@@ -415,6 +675,7 @@ function extraerTodosLosRangos() {
           datosPorRango[rangoConfig.nombre].totales.numVentas += numVentas;
           datosPorRango[rangoConfig.nombre].totales.utilidad += utilidad;
           datosPorRango[rangoConfig.nombre].totales.impresiones += impresiones;
+          datosPorRango[rangoConfig.nombre].totales.presupuesto += presupuesto;
 
           totalPorRango[rangoConfig.nombre]++;
         });
@@ -438,12 +699,13 @@ function extraerTodosLosRangos() {
       const roasTotal = totales.gastoTotal > 0 ? totales.factUSD / totales.gastoTotal : 0;
       const roiTotal = totales.gastoTotal > 0 ? totales.utilidad / totales.gastoTotal : 0;
 
-      // Agregar fila de totales
+      // Agregar fila de totales (con nuevas columnas)
       todosLosResultados.push([
         'TOTAL',
         rangoConfig.nombre,
         `(${datos.filas.length} anuncios)`,
-        '', '', '',
+        '', '', '', '', '',  // CONJUNTO, ANUNCIO, AD ID, PAÍS, ESTADO vacíos
+        totales.presupuesto,  // PRESUPUESTO total
         totales.gasto,
         totales.igv,
         totales.gastoTotal,
@@ -465,19 +727,20 @@ function extraerTodosLosRangos() {
   if (todosLosResultados.length > 0) {
     hoja.getRange(2, 1, todosLosResultados.length, headers.length).setValues(todosLosResultados);
 
-    // Formatear columnas
-    hoja.getRange(2, 7, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // GASTO
-    hoja.getRange(2, 8, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // IGV
-    hoja.getRange(2, 9, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // GASTO TOTAL
-    hoja.getRange(2, 10, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');  // FACT USD
-    hoja.getRange(2, 11, todosLosResultados.length, 1).setNumberFormat('0.00');       // ROAS
-    hoja.getRange(2, 12, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');  // UTILIDAD
-    hoja.getRange(2, 13, todosLosResultados.length, 1).setNumberFormat('0.00%');      // ROI
-    hoja.getRange(2, 14, todosLosResultados.length, 2).setNumberFormat('#,##0');      // ALCANCE, CLICS
-    hoja.getRange(2, 16, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');  // CPM
-    hoja.getRange(2, 17, todosLosResultados.length, 1).setNumberFormat('#,##0');      // # VENTAS
-    hoja.getRange(2, 18, todosLosResultados.length, 1).setNumberFormat('0.00');       // T.C.
-    hoja.getRange(2, 19, todosLosResultados.length, 1).setNumberFormat('#,##0');      // IMPRESIONES
+    // Formatear columnas (ajustado para nuevas columnas)
+    hoja.getRange(2, 9, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');    // PRESUPUESTO
+    hoja.getRange(2, 10, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // GASTO
+    hoja.getRange(2, 11, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // IGV
+    hoja.getRange(2, 12, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // GASTO TOTAL
+    hoja.getRange(2, 13, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // FACT USD
+    hoja.getRange(2, 14, todosLosResultados.length, 1).setNumberFormat('0.00');        // ROAS
+    hoja.getRange(2, 15, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // UTILIDAD
+    hoja.getRange(2, 16, todosLosResultados.length, 1).setNumberFormat('0.00%');       // ROI
+    hoja.getRange(2, 17, todosLosResultados.length, 2).setNumberFormat('#,##0');       // ALCANCE, CLICS
+    hoja.getRange(2, 19, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // CPM
+    hoja.getRange(2, 20, todosLosResultados.length, 1).setNumberFormat('#,##0');       // # VENTAS
+    hoja.getRange(2, 21, todosLosResultados.length, 1).setNumberFormat('0.00');        // T.C.
+    hoja.getRange(2, 22, todosLosResultados.length, 1).setNumberFormat('#,##0');       // IMPRESIONES
 
     // Colorear filas por rango
     const colores = {
@@ -522,6 +785,69 @@ function extraerTodosLosRangos() {
     // Agregar filtro automático en las cabeceras
     const rangoFiltro = hoja.getRange(1, 1, todosLosResultados.length + 1, headers.length);
     rangoFiltro.createFilter();
+
+    // Agregar fila de TOTAL GENERAL que se actualiza automáticamente con filtros
+    // Esta fila usa SUBTOTAL() que solo suma filas visibles
+    const filaTotal = todosLosResultados.length + 2;
+    const primeraFilaDatos = 2;
+    const ultimaFilaDatos = todosLosResultados.length + 1;
+
+    // Fórmulas SUBTOTAL (109 = SUM excluyendo filas ocultas y filtradas)
+    const formulaPresupuesto = `=SUBTOTAL(109,I${primeraFilaDatos}:I${ultimaFilaDatos})`;
+    const formulaGasto = `=SUBTOTAL(109,J${primeraFilaDatos}:J${ultimaFilaDatos})`;
+    const formulaIGV = `=SUBTOTAL(109,K${primeraFilaDatos}:K${ultimaFilaDatos})`;
+    const formulaGastoTotal = `=SUBTOTAL(109,L${primeraFilaDatos}:L${ultimaFilaDatos})`;
+    const formulaFactUSD = `=SUBTOTAL(109,M${primeraFilaDatos}:M${ultimaFilaDatos})`;
+    const formulaROAS = `=IF(L${filaTotal}>0,M${filaTotal}/L${filaTotal},0)`;
+    const formulaUtilidad = `=SUBTOTAL(109,O${primeraFilaDatos}:O${ultimaFilaDatos})`;
+    const formulaROI = `=IF(L${filaTotal}>0,O${filaTotal}/L${filaTotal},0)`;
+    const formulaAlcance = `=SUBTOTAL(109,Q${primeraFilaDatos}:Q${ultimaFilaDatos})`;
+    const formulaClics = `=SUBTOTAL(109,R${primeraFilaDatos}:R${ultimaFilaDatos})`;
+    const formulaCPM = `=IF(V${filaTotal}>0,(J${filaTotal}/V${filaTotal})*1000,0)`;
+    const formulaVentas = `=SUBTOTAL(109,T${primeraFilaDatos}:T${ultimaFilaDatos})`;
+    const formulaImpresiones = `=SUBTOTAL(109,V${primeraFilaDatos}:V${ultimaFilaDatos})`;
+
+    hoja.getRange(filaTotal, 1, 1, headers.length).setValues([[
+      '',
+      'TOTAL GENERAL',
+      '(se actualiza automáticamente al filtrar)',
+      '', '', '', '', '',
+      formulaPresupuesto,
+      formulaGasto,
+      formulaIGV,
+      formulaGastoTotal,
+      formulaFactUSD,
+      formulaROAS,
+      formulaUtilidad,
+      formulaROI,
+      formulaAlcance,
+      formulaClics,
+      formulaCPM,
+      formulaVentas,
+      '',
+      formulaImpresiones
+    ]]);
+
+    // Formatear fila de total
+    const rangoTotal = hoja.getRange(filaTotal, 1, 1, headers.length);
+    rangoTotal.setBackground('#00695c')
+              .setFontColor('white')
+              .setFontWeight('bold')
+              .setBorder(true, true, true, true, null, null, 'white', SpreadsheetApp.BorderStyle.SOLID_THICK);
+
+    hoja.getRange(filaTotal, 9).setNumberFormat('$#,##0.00');
+    hoja.getRange(filaTotal, 10).setNumberFormat('$#,##0.00');
+    hoja.getRange(filaTotal, 11).setNumberFormat('$#,##0.00');
+    hoja.getRange(filaTotal, 12).setNumberFormat('$#,##0.00');
+    hoja.getRange(filaTotal, 13).setNumberFormat('$#,##0.00');
+    hoja.getRange(filaTotal, 14).setNumberFormat('0.00');
+    hoja.getRange(filaTotal, 15).setNumberFormat('$#,##0.00');
+    hoja.getRange(filaTotal, 16).setNumberFormat('0.00%');
+    hoja.getRange(filaTotal, 17).setNumberFormat('#,##0');
+    hoja.getRange(filaTotal, 18).setNumberFormat('#,##0');
+    hoja.getRange(filaTotal, 19).setNumberFormat('$#,##0.00');
+    hoja.getRange(filaTotal, 20).setNumberFormat('#,##0');
+    hoja.getRange(filaTotal, 22).setNumberFormat('#,##0');
 
     // Ocultar la columna TIPO (opcional, el usuario puede filtrar por ella)
     // hoja.hideColumns(1);
@@ -991,7 +1317,7 @@ function diagnosticarAdIdCompleto() {
     if (token && cuentas.length > 0) {
       for (const cuenta of cuentas) {
         try {
-          const url = `https://graph.facebook.com/v21.0/${cuenta[0]}/ads?fields=id,name,adset_id,campaign_id,effective_status&date_preset=maximum&access_token=${token}&limit=1000`;
+          const url = `https://graph.facebook.com/v22.0/${cuenta[0]}/ads?fields=id,name,adset_id,campaign_id,effective_status&date_preset=maximum&access_token=${token}&limit=1000`;
           const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
           const result = JSON.parse(response.getContentText());
 

@@ -27,7 +27,7 @@ function obtenerConfiguracion() {
   const config = {
     META: {
       ACCESS_TOKEN: props.getProperty('META_TOKEN') || '',
-      API_VERSION: 'v21.0',
+      API_VERSION: 'v22.0',
       ENDPOINT: 'https://graph.facebook.com',
       CUENTAS: JSON.parse(props.getProperty('META_CUENTAS') || '[]')
     },

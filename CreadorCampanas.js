@@ -373,7 +373,7 @@ function crearCampanaWhatsApp() {
  * Crea la campaña base en Meta
  */
 function crearCampanaBase(accountId, token, campana) {
-  const endpoint = `https://graph.facebook.com/v21.0/${accountId}/campaigns`;
+  const endpoint = `https://graph.facebook.com/v22.0/${accountId}/campaigns`;
 
   const payload = {
     name: campana.nombre,
@@ -404,7 +404,7 @@ function crearCampanaBase(accountId, token, campana) {
  * Crea el conjunto de anuncios (Ad Set)
  */
 function crearAdSet(accountId, campaignId, token, campana) {
-  const endpoint = `https://graph.facebook.com/v21.0/${accountId}/adsets`;
+  const endpoint = `https://graph.facebook.com/v22.0/${accountId}/adsets`;
 
   // Validar y procesar países
   const paisesStr = campana.paises ? campana.paises.toString().trim() : '';
@@ -506,7 +506,7 @@ function crearAdSet(accountId, campaignId, token, campana) {
  * Crea el creative (diseño del anuncio)
  */
 function crearAdCreative(accountId, token, campana) {
-  const endpoint = `https://graph.facebook.com/v21.0/${accountId}/adcreatives`;
+  const endpoint = `https://graph.facebook.com/v22.0/${accountId}/adcreatives`;
 
   // Limpiar número de WhatsApp (quitar + y espacios)
   const whatsappNumber = campana.numeroWhatsApp.replace(/[\+\s]/g, '');
@@ -574,7 +574,7 @@ function crearAdCreative(accountId, token, campana) {
  * Crea el anuncio final
  */
 function crearAd(accountId, adsetId, creativeId, token, campana) {
-  const endpoint = `https://graph.facebook.com/v21.0/${accountId}/ads`;
+  const endpoint = `https://graph.facebook.com/v22.0/${accountId}/ads`;
 
   const payload = {
     name: campana.nombreAnuncio,
@@ -618,7 +618,7 @@ function mostrarPageIDsDisponibles() {
     }
 
     // Primero intentar obtener páginas del usuario
-    const endpoint = `https://graph.facebook.com/v21.0/me/accounts?access_token=${token}`;
+    const endpoint = `https://graph.facebook.com/v22.0/me/accounts?access_token=${token}`;
     const response = UrlFetchApp.fetch(endpoint, { muteHttpExceptions: true });
     const result = JSON.parse(response.getContentText());
 
@@ -752,7 +752,7 @@ function validarPageID() {
     const config = obtenerConfiguracion();
     const token = config.META.ACCESS_TOKEN;
 
-    const endpoint = `https://graph.facebook.com/v21.0/${pageId}?fields=name,id&access_token=${token}`;
+    const endpoint = `https://graph.facebook.com/v22.0/${pageId}?fields=name,id&access_token=${token}`;
     const response = UrlFetchApp.fetch(endpoint, { muteHttpExceptions: true });
     const result = JSON.parse(response.getContentText());
 
