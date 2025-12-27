@@ -254,7 +254,8 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
   const paisesConocidos = Object.keys(monedasPais);
 
   // Obtener insights básicos - ACTUALIZADO A v22.0
-  const campos = 'campaign_name,adset_name,ad_name,ad_id,campaign_id,adset_id,spend,impressions,reach,clicks';
+  // unique_clicks = clics únicos en el enlace
+  const campos = 'campaign_name,adset_name,ad_name,ad_id,campaign_id,adset_id,spend,impressions,reach,unique_clicks';
   const url = `https://graph.facebook.com/v22.0/${accountId}/insights?level=ad&fields=${campos}&${timeParam}&limit=500&access_token=${token}`;
 
   const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
@@ -269,6 +270,12 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
 
   const json = JSON.parse(responseText);
   let datos = json.data || [];
+
+  // LOG: Ver qué campos vienen en el primer resultado
+  if (datos.length > 0) {
+    Logger.log('Campos disponibles en insights: ' + JSON.stringify(Object.keys(datos[0])));
+    Logger.log('Primer item completo: ' + JSON.stringify(datos[0]));
+  }
 
   // Manejar paginación
   let nextUrl = json.paging && json.paging.next;
@@ -321,9 +328,7 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
       });
 
       if (response.getResponseCode() === 200) {
-        const result = JSON.parse(response.getContentText());
-        Logger.log('Batch response sample: ' + JSON.stringify(result[0])); // Debug
-        return result;
+        return JSON.parse(response.getContentText());
       } else {
         Logger.log('Error en batch: ' + response.getContentText());
       }
@@ -347,15 +352,11 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
       if (result && result.code === 200) {
         try {
           const data = JSON.parse(result.body);
-          const status = data.effective_status || 'UNKNOWN';
-          adCache[batch[idx]] = status;
-          Logger.log(`Ad ${batch[idx]}: ${status}`); // Debug
+          adCache[batch[idx]] = data.effective_status || 'UNKNOWN';
         } catch (e) {
-          Logger.log(`Error parsing ad ${batch[idx]}: ${e.message}`);
           adCache[batch[idx]] = 'UNKNOWN';
         }
       } else {
-        Logger.log(`Error en ad ${batch[idx]}: code ${result ? result.code : 'null'}`);
         adCache[batch[idx]] = 'UNKNOWN';
       }
     });
@@ -383,18 +384,14 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
             presupuesto = parseFloat(data.lifetime_budget) / 100;
           }
 
-          const status = data.effective_status || 'UNKNOWN';
           adsetCache[batch[idx]] = {
-            status: status,
+            status: data.effective_status || 'UNKNOWN',
             presupuesto: presupuesto
           };
-          Logger.log(`Adset ${batch[idx]}: ${status}, presupuesto: ${presupuesto}`); // Debug
         } catch (e) {
-          Logger.log(`Error parsing adset ${batch[idx]}: ${e.message}`);
           adsetCache[batch[idx]] = { status: 'UNKNOWN', presupuesto: 0 };
         }
       } else {
-        Logger.log(`Error en adset ${batch[idx]}: code ${result ? result.code : 'null'}`);
         adsetCache[batch[idx]] = { status: 'UNKNOWN', presupuesto: 0 };
       }
     });
@@ -414,15 +411,11 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
       if (result && result.code === 200) {
         try {
           const data = JSON.parse(result.body);
-          const status = data.effective_status || 'UNKNOWN';
-          campaignCache[batch[idx]] = status;
-          Logger.log(`Campaign ${batch[idx]}: ${status}`); // Debug
+          campaignCache[batch[idx]] = data.effective_status || 'UNKNOWN';
         } catch (e) {
-          Logger.log(`Error parsing campaign ${batch[idx]}: ${e.message}`);
           campaignCache[batch[idx]] = 'UNKNOWN';
         }
       } else {
-        Logger.log(`Error en campaign ${batch[idx]}: code ${result ? result.code : 'null'}`);
         campaignCache[batch[idx]] = 'UNKNOWN';
       }
     });
@@ -441,26 +434,11 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
     return 'N/A';
   }
 
-  // Log de diagnóstico de caches
-  Logger.log(`Total en adCache: ${Object.keys(adCache).length}`);
-  Logger.log(`Total en adsetCache: ${Object.keys(adsetCache).length}`);
-  Logger.log(`Total en campaignCache: ${Object.keys(campaignCache).length}`);
-  Logger.log(`Muestra adCache: ${JSON.stringify(Object.keys(adCache).slice(0, 3))}`);
-  Logger.log(`Muestra adsetCache: ${JSON.stringify(Object.keys(adsetCache).slice(0, 3))}`);
-  Logger.log(`Muestra campaignCache: ${JSON.stringify(Object.keys(campaignCache).slice(0, 3))}`);
-
   // Enriquecer datos usando los caches
-  const datosEnriquecidos = datos.map((item, idx) => {
+  const datosEnriquecidos = datos.map(item => {
     const adStatus = adCache[item.ad_id] || 'UNKNOWN';
     const adsetData = adsetCache[item.adset_id] || { status: 'UNKNOWN', presupuesto: 0 };
     const campaignStatus = campaignCache[item.campaign_id] || 'UNKNOWN';
-
-    // Log del primer item para debug
-    if (idx === 0) {
-      Logger.log(`Primer item - Ad ID: ${item.ad_id}, adStatus: ${adStatus}`);
-      Logger.log(`Primer item - Adset ID: ${item.adset_id}, adsetStatus: ${adsetData.status}`);
-      Logger.log(`Primer item - Campaign ID: ${item.campaign_id}, campaignStatus: ${campaignStatus}`);
-    }
 
     // Extraer país del nombre de la campaña
     const pais = extraerPaisDeCampana(item.campaign_name);
@@ -552,7 +530,7 @@ function extraerTodosLosRangos() {
   const headers = [
     'TIPO', 'RANGO', 'CAMPAÑA', 'CONJUNTO', 'ANUNCIO', 'AD ID', 'PAÍS', 'ESTADO', 'PRESUPUESTO',
     'GASTO', 'IGV', 'GASTO TOTAL', 'FACT USD', 'ROAS', 'UTILIDAD', 'ROI',
-    'ALCANCE', 'CLICS', 'CPM', '# VENTAS', 'T.C.', 'IMPRESIONES'
+    'ALCANCE', 'CLICS ÚNICOS', 'MENSAJES', 'CPM', '# VENTAS', 'T.C.', 'IMPRESIONES'
   ];
   hoja.getRange(1, 1, 1, headers.length)
       .setValues([headers])
@@ -588,13 +566,15 @@ function extraerTodosLosRangos() {
     totalPorRango[rangoConfig.nombre] = 0;
     datosPorRango[rangoConfig.nombre] = {
       filas: [],
-      totales: { gasto: 0, igv: 0, gastoTotal: 0, alcance: 0, clics: 0, factUSD: 0, numVentas: 0, utilidad: 0, impresiones: 0, presupuesto: 0 }
+      totales: { gasto: 0, igv: 0, gastoTotal: 0, alcance: 0, clics: 0, mensajes: 0, factUSD: 0, numVentas: 0, utilidad: 0, impresiones: 0, presupuesto: 0 }
     };
 
-    // Calcular fechas del rango y obtener compras filtradas por ese rango
+    // Calcular fechas del rango y obtener compras y mensajes filtrados por ese rango
     const fechasRango = calcularFechasDeRango(rangoConfig.nombre, ss.getSpreadsheetTimeZone());
     const comprasPorAdId = obtenerComprasPorAdId(filtroPais, fechasRango.inicio, fechasRango.fin);
+    const mensajesPorAdId = obtenerMensajesPorAdId(filtroPais, fechasRango.inicio, fechasRango.fin);
     Logger.log(`${rangoConfig.nombre}: Compras encontradas para ${Object.keys(comprasPorAdId).length} AD IDs`);
+    Logger.log(`${rangoConfig.nombre}: Mensajes encontrados para ${Object.keys(mensajesPorAdId).length} AD IDs`);
 
     cuentas.forEach(cuenta => {
       try {
@@ -608,25 +588,31 @@ function extraerTodosLosRangos() {
           );
         }
 
-        datos.forEach(item => {
+        datos.forEach((item, itemIdx) => {
           const gasto = parseFloat(item.spend) || 0;
           const igv = gasto * 0.18;
           const gastoTotal = gasto + igv;
           const alcance = parseInt(item.reach) || 0;
-          const clics = parseInt(item.clicks) || 0;
+          const clicsUnicos = parseInt(item.unique_clicks) || 0;
           const impresiones = parseInt(item.impressions) || 0;
           const cpm = impresiones > 0 ? (gasto / impresiones) * 1000 : 0;
+
+          // LOG: Ver primer item para debug de clics únicos
+          if (itemIdx === 0) {
+            Logger.log(`Primer anuncio - unique_clicks: ${item.unique_clicks}, clicsUnicos: ${clicsUnicos}`);
+          }
 
           // Obtener datos adicionales del item
           const estadoGeneral = item.estado_general || 'EN PAUSA';
           const presupuesto = item.presupuesto || 0;
           const pais = item.pais || 'N/A';
 
-          // Buscar facturación por AD ID para este rango
+          // Buscar facturación y mensajes por AD ID para este rango
           const adId = item.ad_id || '';
           let factUSD = 0;
           let numVentas = 0;
           let tasaCambio = '';
+          let numMensajes = 0;
 
           // Vincular compras del rango actual
           if (adId && comprasPorAdId[adId]) {
@@ -634,6 +620,16 @@ function extraerTodosLosRangos() {
             factUSD = compra.totalUSD;
             numVentas = compra.cantidadVentas;
             tasaCambio = compra.tasa;
+          }
+
+          // Vincular mensajes del rango actual
+          if (adId && mensajesPorAdId[adId]) {
+            numMensajes = mensajesPorAdId[adId].cantidadMensajes;
+          }
+
+          // LOG: Ver primer anuncio con mensajes
+          if (itemIdx === 0 && numMensajes > 0) {
+            Logger.log(`Primer anuncio con mensajes - AD ID: ${adId}, mensajes: ${numMensajes}`);
           }
 
           const roas = gastoTotal > 0 ? factUSD / gastoTotal : 0;
@@ -658,7 +654,8 @@ function extraerTodosLosRangos() {
             utilidad,
             roi,
             alcance,
-            clics,
+            clicsUnicos,
+            numMensajes,
             cpm,
             numVentas,
             tasaCambio,
@@ -670,7 +667,8 @@ function extraerTodosLosRangos() {
           datosPorRango[rangoConfig.nombre].totales.igv += igv;
           datosPorRango[rangoConfig.nombre].totales.gastoTotal += gastoTotal;
           datosPorRango[rangoConfig.nombre].totales.alcance += alcance;
-          datosPorRango[rangoConfig.nombre].totales.clics += clics;
+          datosPorRango[rangoConfig.nombre].totales.clics += clicsUnicos;
+          datosPorRango[rangoConfig.nombre].totales.mensajes += numMensajes;
           datosPorRango[rangoConfig.nombre].totales.factUSD += factUSD;
           datosPorRango[rangoConfig.nombre].totales.numVentas += numVentas;
           datosPorRango[rangoConfig.nombre].totales.utilidad += utilidad;
@@ -714,7 +712,8 @@ function extraerTodosLosRangos() {
         totales.utilidad,
         roiTotal,
         totales.alcance,
-        totales.clics,
+        totales.clics,        // CLICS ÚNICOS
+        totales.mensajes,     // MENSAJES
         cpmTotal,
         totales.numVentas,
         '',  // T.C. vacío en totales
@@ -736,11 +735,13 @@ function extraerTodosLosRangos() {
     hoja.getRange(2, 14, todosLosResultados.length, 1).setNumberFormat('0.00');        // ROAS
     hoja.getRange(2, 15, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // UTILIDAD
     hoja.getRange(2, 16, todosLosResultados.length, 1).setNumberFormat('0.00%');       // ROI
-    hoja.getRange(2, 17, todosLosResultados.length, 2).setNumberFormat('#,##0');       // ALCANCE, CLICS
-    hoja.getRange(2, 19, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // CPM
-    hoja.getRange(2, 20, todosLosResultados.length, 1).setNumberFormat('#,##0');       // # VENTAS
-    hoja.getRange(2, 21, todosLosResultados.length, 1).setNumberFormat('0.00');        // T.C.
-    hoja.getRange(2, 22, todosLosResultados.length, 1).setNumberFormat('#,##0');       // IMPRESIONES
+    hoja.getRange(2, 17, todosLosResultados.length, 1).setNumberFormat('#,##0');       // ALCANCE
+    hoja.getRange(2, 18, todosLosResultados.length, 1).setNumberFormat('#,##0');       // CLICS ÚNICOS
+    hoja.getRange(2, 19, todosLosResultados.length, 1).setNumberFormat('#,##0');       // MENSAJES
+    hoja.getRange(2, 20, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // CPM
+    hoja.getRange(2, 21, todosLosResultados.length, 1).setNumberFormat('#,##0');       // # VENTAS
+    hoja.getRange(2, 22, todosLosResultados.length, 1).setNumberFormat('0.00');        // T.C.
+    hoja.getRange(2, 23, todosLosResultados.length, 1).setNumberFormat('#,##0');       // IMPRESIONES
 
     // Colorear filas por rango
     const colores = {
@@ -802,10 +803,11 @@ function extraerTodosLosRangos() {
     const formulaUtilidad = `=SUBTOTAL(109,O${primeraFilaDatos}:O${ultimaFilaDatos})`;
     const formulaROI = `=IF(L${filaTotal}>0,O${filaTotal}/L${filaTotal},0)`;
     const formulaAlcance = `=SUBTOTAL(109,Q${primeraFilaDatos}:Q${ultimaFilaDatos})`;
-    const formulaClics = `=SUBTOTAL(109,R${primeraFilaDatos}:R${ultimaFilaDatos})`;
-    const formulaCPM = `=IF(V${filaTotal}>0,(J${filaTotal}/V${filaTotal})*1000,0)`;
-    const formulaVentas = `=SUBTOTAL(109,T${primeraFilaDatos}:T${ultimaFilaDatos})`;
-    const formulaImpresiones = `=SUBTOTAL(109,V${primeraFilaDatos}:V${ultimaFilaDatos})`;
+    const formulaClicsUnicos = `=SUBTOTAL(109,R${primeraFilaDatos}:R${ultimaFilaDatos})`;
+    const formulaMensajes = `=SUBTOTAL(109,S${primeraFilaDatos}:S${ultimaFilaDatos})`;
+    const formulaCPM = `=IF(W${filaTotal}>0,(J${filaTotal}/W${filaTotal})*1000,0)`;
+    const formulaVentas = `=SUBTOTAL(109,U${primeraFilaDatos}:U${ultimaFilaDatos})`;
+    const formulaImpresiones = `=SUBTOTAL(109,W${primeraFilaDatos}:W${ultimaFilaDatos})`;
 
     hoja.getRange(filaTotal, 1, 1, headers.length).setValues([[
       '',
@@ -821,7 +823,8 @@ function extraerTodosLosRangos() {
       formulaUtilidad,
       formulaROI,
       formulaAlcance,
-      formulaClics,
+      formulaClicsUnicos,
+      formulaMensajes,
       formulaCPM,
       formulaVentas,
       '',
@@ -835,19 +838,20 @@ function extraerTodosLosRangos() {
               .setFontWeight('bold')
               .setBorder(true, true, true, true, null, null, 'white', SpreadsheetApp.BorderStyle.SOLID_THICK);
 
-    hoja.getRange(filaTotal, 9).setNumberFormat('$#,##0.00');
-    hoja.getRange(filaTotal, 10).setNumberFormat('$#,##0.00');
-    hoja.getRange(filaTotal, 11).setNumberFormat('$#,##0.00');
-    hoja.getRange(filaTotal, 12).setNumberFormat('$#,##0.00');
-    hoja.getRange(filaTotal, 13).setNumberFormat('$#,##0.00');
-    hoja.getRange(filaTotal, 14).setNumberFormat('0.00');
-    hoja.getRange(filaTotal, 15).setNumberFormat('$#,##0.00');
-    hoja.getRange(filaTotal, 16).setNumberFormat('0.00%');
-    hoja.getRange(filaTotal, 17).setNumberFormat('#,##0');
-    hoja.getRange(filaTotal, 18).setNumberFormat('#,##0');
-    hoja.getRange(filaTotal, 19).setNumberFormat('$#,##0.00');
-    hoja.getRange(filaTotal, 20).setNumberFormat('#,##0');
-    hoja.getRange(filaTotal, 22).setNumberFormat('#,##0');
+    hoja.getRange(filaTotal, 9).setNumberFormat('$#,##0.00');   // PRESUPUESTO
+    hoja.getRange(filaTotal, 10).setNumberFormat('$#,##0.00');  // GASTO
+    hoja.getRange(filaTotal, 11).setNumberFormat('$#,##0.00');  // IGV
+    hoja.getRange(filaTotal, 12).setNumberFormat('$#,##0.00');  // GASTO TOTAL
+    hoja.getRange(filaTotal, 13).setNumberFormat('$#,##0.00');  // FACT USD
+    hoja.getRange(filaTotal, 14).setNumberFormat('0.00');       // ROAS
+    hoja.getRange(filaTotal, 15).setNumberFormat('$#,##0.00');  // UTILIDAD
+    hoja.getRange(filaTotal, 16).setNumberFormat('0.00%');      // ROI
+    hoja.getRange(filaTotal, 17).setNumberFormat('#,##0');      // ALCANCE
+    hoja.getRange(filaTotal, 18).setNumberFormat('#,##0');      // CLICS ÚNICOS
+    hoja.getRange(filaTotal, 19).setNumberFormat('#,##0');      // MENSAJES
+    hoja.getRange(filaTotal, 20).setNumberFormat('$#,##0.00');  // CPM
+    hoja.getRange(filaTotal, 21).setNumberFormat('#,##0');      // # VENTAS
+    hoja.getRange(filaTotal, 23).setNumberFormat('#,##0');      // IMPRESIONES
 
     // Ocultar la columna TIPO (opcional, el usuario puede filtrar por ella)
     // hoja.hideColumns(1);
@@ -1000,8 +1004,22 @@ function obtenerComprasPorAdId(filtroPais, fechaInicio, fechaFin) {
 
   hojas.forEach(hojaObj => {
     const id = hojaObj.id || hojaObj;
+    const nombreHoja = hojaObj.nombre || '';
+
+    // FILTRAR POR PAÍS: Solo leer spreadsheets que correspondan al país del producto
+    if (filtroPais && filtroPais.length > 0) {
+      const filtroUpper = filtroPais.toUpperCase();
+      const nombreUpper = nombreHoja.toUpperCase();
+
+      // Si el nombre de la hoja no contiene el país del filtro, saltarla
+      if (!nombreUpper.includes(filtroUpper)) {
+        Logger.log(`Saltando spreadsheet "${nombreHoja}" porque no coincide con país "${filtroPais}"`);
+        return;
+      }
+    }
 
     try {
+      Logger.log(`Leyendo compras de spreadsheet: "${nombreHoja}" (${id})`);
       const ss = SpreadsheetApp.openById(id);
       const hoja = ss.getSheetByName('Compras');
       if (!hoja) {
@@ -1105,6 +1123,422 @@ function obtenerComprasPorAdId(filtroPais, fechaInicio, fechaFin) {
   Logger.log(`Total ventas contabilizadas: ${totalVentas}`);
 
   return facturacionPorAd;
+}
+
+/**
+ * Obtiene mensajes agrupados por AD ID desde los spreadsheets de mensajes
+ * Similar a obtenerComprasPorAdId pero para la hoja "Mensajes"
+ * @param {string} filtroPais - Filtro opcional de país (lowercase)
+ * @param {Date} fechaInicio - Fecha de inicio para filtrar mensajes
+ * @param {Date} fechaFin - Fecha de fin para filtrar mensajes
+ * @returns {Object} - Mapa de adId -> { cantidadMensajes, pais }
+ */
+function obtenerMensajesPorAdId(filtroPais, fechaInicio, fechaFin) {
+  const config = obtenerConfiguracion();
+  const hojas = config.VENTAS_BOT.HOJAS;
+
+  if (hojas.length === 0) {
+    Logger.log('No hay hojas de mensajes configuradas');
+    return {};
+  }
+
+  // Mapa de adId -> datos de mensajes
+  const mensajesPorAd = {};
+
+  // Normalizar fechas del rango (solo año, mes, día)
+  const inicioNormalizado = fechaInicio ? new Date(fechaInicio.getFullYear(), fechaInicio.getMonth(), fechaInicio.getDate()) : null;
+  const finNormalizado = fechaFin ? new Date(fechaFin.getFullYear(), fechaFin.getMonth(), fechaFin.getDate(), 23, 59, 59) : null;
+
+  hojas.forEach(hojaObj => {
+    const id = hojaObj.id || hojaObj;
+    const nombreHoja = hojaObj.nombre || '';
+
+    // FILTRAR POR PAÍS: Solo leer spreadsheets que correspondan al país del producto
+    if (filtroPais && filtroPais.length > 0) {
+      const filtroUpper = filtroPais.toUpperCase();
+      const nombreUpper = nombreHoja.toUpperCase();
+
+      if (!nombreUpper.includes(filtroUpper)) {
+        return; // Saltar este spreadsheet
+      }
+    }
+
+    try {
+      const ss = SpreadsheetApp.openById(id);
+      const hoja = ss.getSheetByName('Mensajes');
+
+      if (!hoja) return;
+
+      const lastRow = hoja.getLastRow();
+      if (lastRow < 2) return;
+
+      // Leer columnas A (fecha) y E (POST ID)
+      const COL_FECHA = 1;
+      const COL_POST_ID = 5;
+      const datos = hoja.getRange(2, 1, lastRow - 1, 5).getValues();
+
+      datos.forEach(fila => {
+        const fechaRaw = fila[COL_FECHA - 1];
+        const postIdRaw = fila[COL_POST_ID - 1];
+
+        // Validar POST ID
+        if (!postIdRaw) return;
+
+        // Parsear fecha
+        let fechaObj;
+        if (fechaRaw instanceof Date) {
+          fechaObj = fechaRaw;
+        } else {
+          fechaObj = new Date(fechaRaw);
+        }
+
+        if (isNaN(fechaObj.getTime())) return;
+
+        // Normalizar fecha (solo año, mes, día)
+        const fechaNormalizada = new Date(fechaObj.getFullYear(), fechaObj.getMonth(), fechaObj.getDate());
+
+        // Filtrar por rango de fechas
+        if (inicioNormalizado && finNormalizado) {
+          if (fechaNormalizada < inicioNormalizado || fechaNormalizada > finNormalizado) {
+            return; // Fuera del rango
+          }
+        }
+
+        // Extraer AD ID del POST ID (igual que las funciones de diagnóstico)
+        const postIdStr = postIdRaw.toString().trim();
+        const adId = postIdStr.replace(/^ads[\s\-_]*/i, '');
+
+        if (!adId) return;
+
+        // Agregar al mapa
+        if (!mensajesPorAd[adId]) {
+          mensajesPorAd[adId] = {
+            cantidadMensajes: 0
+          };
+        }
+
+        mensajesPorAd[adId].cantidadMensajes++;
+      });
+
+    } catch (error) {
+      Logger.log(`Error leyendo spreadsheet ${id} (Mensajes): ${error.message}`);
+    }
+  });
+
+  return mensajesPorAd;
+}
+
+/**
+ * DIAGNÓSTICO: Contar mensajes de AYER en PERÚ y mostrar en X1
+ */
+function contarMensajesAyerPeru() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const config = obtenerConfiguracion();
+  const hojas = config.VENTAS_BOT.HOJAS;
+
+  // Calcular fecha de AYER (26 de diciembre de 2025)
+  const hoy = new Date();
+  const ayer = new Date(hoy);
+  ayer.setDate(hoy.getDate() - 1);
+
+  // Normalizar fechas (solo año, mes, día)
+  const ayerNormalizado = new Date(ayer.getFullYear(), ayer.getMonth(), ayer.getDate());
+
+  Logger.log(`Buscando mensajes de AYER: ${ayerNormalizado.toISOString()}`);
+
+  // Buscar spreadsheet de PERÚ
+  let spreadsheetPeru = null;
+  for (const hojaObj of hojas) {
+    const nombreHoja = hojaObj.nombre || '';
+    if (nombreHoja.toUpperCase().includes('PERU')) {
+      spreadsheetPeru = hojaObj;
+      Logger.log(`Encontrado spreadsheet de PERÚ: "${nombreHoja}" (${hojaObj.id})`);
+      break;
+    }
+  }
+
+  if (!spreadsheetPeru) {
+    Logger.log('❌ No se encontró spreadsheet de PERÚ');
+    ss.getRange('X1').setValue('ERROR: No hay spreadsheet PERÚ');
+    return;
+  }
+
+  try {
+    const ssPeru = SpreadsheetApp.openById(spreadsheetPeru.id);
+    const hojaMensajes = ssPeru.getSheetByName('Mensajes');
+
+    if (!hojaMensajes) {
+      Logger.log('❌ No se encontró hoja "Mensajes" en spreadsheet de PERÚ');
+      ss.getRange('X1').setValue('ERROR: No hay hoja Mensajes');
+      return;
+    }
+
+    const lastRow = hojaMensajes.getLastRow();
+    Logger.log(`Total de filas en Mensajes: ${lastRow}`);
+
+    if (lastRow < 2) {
+      ss.getRange('X1').setValue(0);
+      return;
+    }
+
+    // Leer columna A (fecha) de todas las filas
+    const datos = hojaMensajes.getRange(2, 1, lastRow - 1, 1).getValues();
+
+    let contadorAyer = 0;
+    let totalRegistros = 0;
+
+    Logger.log('Primeras 10 fechas encontradas:');
+
+    datos.forEach((fila, idx) => {
+      totalRegistros++;
+      const fecha = fila[0];
+
+      if (!fecha) return;
+
+      let fechaObj;
+      if (fecha instanceof Date) {
+        fechaObj = fecha;
+      } else {
+        fechaObj = new Date(fecha);
+      }
+
+      if (isNaN(fechaObj.getTime())) {
+        if (idx < 10) Logger.log(`  Fila ${idx + 2}: Fecha inválida`);
+        return;
+      }
+
+      // Normalizar (solo año, mes, día)
+      const fechaNormalizada = new Date(fechaObj.getFullYear(), fechaObj.getMonth(), fechaObj.getDate());
+
+      if (idx < 10) {
+        Logger.log(`  Fila ${idx + 2}: ${fechaObj.toISOString()} → ${fechaNormalizada.toISOString()}`);
+      }
+
+      // Comparar si es AYER
+      if (fechaNormalizada.getTime() === ayerNormalizado.getTime()) {
+        contadorAyer++;
+      }
+    });
+
+    Logger.log(`Total registros procesados: ${totalRegistros}`);
+    Logger.log(`Mensajes de AYER (${ayerNormalizado.toDateString()}): ${contadorAyer}`);
+
+    // Escribir resultado en X1
+    ss.getRange('X1').setValue(contadorAyer);
+    ss.toast(`Mensajes de AYER en PERÚ: ${contadorAyer}`, 'Diagnóstico', 5);
+
+  } catch (error) {
+    Logger.log(`Error: ${error.message}`);
+    ss.getRange('X1').setValue('ERROR: ' + error.message);
+  }
+}
+
+/**
+ * DIAGNÓSTICO: Contar mensajes de un AD ID específico en AYER y mostrar en X2
+ */
+function contarMensajesPorAdId() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const config = obtenerConfiguracion();
+  const hojas = config.VENTAS_BOT.HOJAS;
+
+  const adIdBuscado = '120239870046160380'; // AD ID específico
+
+  // Calcular fecha de AYER
+  const hoy = new Date();
+  const ayer = new Date(hoy);
+  ayer.setDate(hoy.getDate() - 1);
+  const ayerNormalizado = new Date(ayer.getFullYear(), ayer.getMonth(), ayer.getDate());
+
+  Logger.log(`Buscando mensajes del AD ID ${adIdBuscado} en fecha AYER: ${ayerNormalizado.toISOString()}`);
+
+  // Buscar spreadsheet de PERÚ
+  let spreadsheetPeru = null;
+  for (const hojaObj of hojas) {
+    const nombreHoja = hojaObj.nombre || '';
+    if (nombreHoja.toUpperCase().includes('PERU')) {
+      spreadsheetPeru = hojaObj;
+      Logger.log(`Encontrado spreadsheet de PERÚ: "${nombreHoja}" (${hojaObj.id})`);
+      break;
+    }
+  }
+
+  if (!spreadsheetPeru) {
+    Logger.log('❌ No se encontró spreadsheet de PERÚ');
+    ss.getRange('X2').setValue('ERROR: No hay spreadsheet PERÚ');
+    return;
+  }
+
+  try {
+    const ssPeru = SpreadsheetApp.openById(spreadsheetPeru.id);
+    const hojaMensajes = ssPeru.getSheetByName('Mensajes');
+
+    if (!hojaMensajes) {
+      Logger.log('❌ No se encontró hoja "Mensajes"');
+      ss.getRange('X2').setValue('ERROR: No hay hoja Mensajes');
+      return;
+    }
+
+    const lastRow = hojaMensajes.getLastRow();
+    Logger.log(`Total de filas en Mensajes: ${lastRow}`);
+
+    if (lastRow < 2) {
+      ss.getRange('X2').setValue(0);
+      return;
+    }
+
+    // Leer columnas A (fecha) y E (POST ID)
+    const COL_FECHA = 1;
+    const COL_POST_ID = 5;
+    const datos = hojaMensajes.getRange(2, 1, lastRow - 1, 5).getValues();
+
+    let contadorMensajes = 0;
+    let totalProcesados = 0;
+
+    Logger.log('Primeros 10 registros procesados:');
+
+    datos.forEach((fila, idx) => {
+      totalProcesados++;
+
+      const fecha = fila[COL_FECHA - 1];
+      const postIdRaw = fila[COL_POST_ID - 1];
+
+      // Validar fecha
+      if (!fecha) return;
+
+      let fechaObj;
+      if (fecha instanceof Date) {
+        fechaObj = fecha;
+      } else {
+        fechaObj = new Date(fecha);
+      }
+
+      if (isNaN(fechaObj.getTime())) return;
+
+      // Normalizar fecha
+      const fechaNormalizada = new Date(fechaObj.getFullYear(), fechaObj.getMonth(), fechaObj.getDate());
+
+      // Verificar si es de AYER
+      const esDeAyer = fechaNormalizada.getTime() === ayerNormalizado.getTime();
+
+      // Extraer AD ID del POST ID
+      if (!postIdRaw) return;
+
+      const postIdStr = postIdRaw.toString().trim();
+      const adIdLimpio = postIdStr.replace(/^ads[\s\-_]*/i, '');
+
+      if (idx < 10) {
+        Logger.log(`  Fila ${idx + 2}: POST ID="${postIdStr}" → AD ID="${adIdLimpio}", Fecha=${fechaNormalizada.toDateString()}, Es AYER=${esDeAyer}`);
+      }
+
+      // Contar si coincide el AD ID y es de AYER
+      if (adIdLimpio === adIdBuscado && esDeAyer) {
+        contadorMensajes++;
+        if (idx < 10) Logger.log(`    ✅ MATCH! Mensaje del AD ID ${adIdBuscado} de AYER`);
+      }
+    });
+
+    Logger.log(`Total registros procesados: ${totalProcesados}`);
+    Logger.log(`Mensajes del AD ID ${adIdBuscado} en AYER: ${contadorMensajes}`);
+
+    // Escribir resultado en X2
+    ss.getRange('X2').setValue(contadorMensajes);
+    ss.toast(`Mensajes del AD ID ${adIdBuscado} en AYER: ${contadorMensajes}`, 'Diagnóstico', 5);
+
+  } catch (error) {
+    Logger.log(`Error: ${error.message}`);
+    ss.getRange('X2').setValue('ERROR: ' + error.message);
+  }
+}
+
+/**
+ * DIAGNÓSTICO: Contar TODOS los mensajes de un AD ID específico (sin filtro de fecha) y mostrar en X3
+ */
+function contarMensajesTotalesPorAdId() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const config = obtenerConfiguracion();
+  const hojas = config.VENTAS_BOT.HOJAS;
+
+  const adIdBuscado = '120239870046160380'; // AD ID específico
+
+  Logger.log(`Buscando TODOS los mensajes del AD ID ${adIdBuscado} (sin filtro de fecha)`);
+
+  // Buscar spreadsheet de PERÚ
+  let spreadsheetPeru = null;
+  for (const hojaObj of hojas) {
+    const nombreHoja = hojaObj.nombre || '';
+    if (nombreHoja.toUpperCase().includes('PERU')) {
+      spreadsheetPeru = hojaObj;
+      Logger.log(`Encontrado spreadsheet de PERÚ: "${nombreHoja}" (${hojaObj.id})`);
+      break;
+    }
+  }
+
+  if (!spreadsheetPeru) {
+    Logger.log('❌ No se encontró spreadsheet de PERÚ');
+    ss.getRange('X3').setValue('ERROR: No hay spreadsheet PERÚ');
+    return;
+  }
+
+  try {
+    const ssPeru = SpreadsheetApp.openById(spreadsheetPeru.id);
+    const hojaMensajes = ssPeru.getSheetByName('Mensajes');
+
+    if (!hojaMensajes) {
+      Logger.log('❌ No se encontró hoja "Mensajes"');
+      ss.getRange('X3').setValue('ERROR: No hay hoja Mensajes');
+      return;
+    }
+
+    const lastRow = hojaMensajes.getLastRow();
+    Logger.log(`Total de filas en Mensajes: ${lastRow}`);
+
+    if (lastRow < 2) {
+      ss.getRange('X3').setValue(0);
+      return;
+    }
+
+    // Leer solo columna E (POST ID) - no necesitamos fecha
+    const COL_POST_ID = 5;
+    const datos = hojaMensajes.getRange(2, COL_POST_ID, lastRow - 1, 1).getValues();
+
+    let contadorMensajes = 0;
+    let totalProcesados = 0;
+
+    Logger.log('Primeros 10 POST IDs procesados:');
+
+    datos.forEach((fila, idx) => {
+      totalProcesados++;
+
+      const postIdRaw = fila[0];
+
+      // Extraer AD ID del POST ID
+      if (!postIdRaw) return;
+
+      const postIdStr = postIdRaw.toString().trim();
+      const adIdLimpio = postIdStr.replace(/^ads[\s\-_]*/i, '');
+
+      if (idx < 10) {
+        Logger.log(`  Fila ${idx + 2}: POST ID="${postIdStr}" → AD ID="${adIdLimpio}"`);
+      }
+
+      // Contar si coincide el AD ID
+      if (adIdLimpio === adIdBuscado) {
+        contadorMensajes++;
+        if (idx < 10) Logger.log(`    ✅ MATCH! Mensaje del AD ID ${adIdBuscado}`);
+      }
+    });
+
+    Logger.log(`Total registros procesados: ${totalProcesados}`);
+    Logger.log(`TOTAL de mensajes del AD ID ${adIdBuscado}: ${contadorMensajes}`);
+
+    // Escribir resultado en X3
+    ss.getRange('X3').setValue(contadorMensajes);
+    ss.toast(`Total de mensajes del AD ID ${adIdBuscado}: ${contadorMensajes}`, 'Diagnóstico', 5);
+
+  } catch (error) {
+    Logger.log(`Error: ${error.message}`);
+    ss.getRange('X3').setValue('ERROR: ' + error.message);
+  }
 }
 
 /**
