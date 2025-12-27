@@ -3,7 +3,10 @@
     "allow": [
       "Bash(clasp login:*)",
       "Bash(clasp list:*)",
-      "Bash(clasp push:*)"
+      "Bash(clasp push:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)"
     ]
   }
 }

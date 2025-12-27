@@ -254,8 +254,8 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
   const paisesConocidos = Object.keys(monedasPais);
 
   // Obtener insights básicos - ACTUALIZADO A v22.0
-  // unique_clicks = clics únicos en el enlace
-  const campos = 'campaign_name,adset_name,ad_name,ad_id,campaign_id,adset_id,spend,impressions,reach,unique_clicks';
+  // unique_inline_link_clicks = clics únicos en el enlace (campo correcto)
+  const campos = 'campaign_name,adset_name,ad_name,ad_id,campaign_id,adset_id,spend,impressions,reach,unique_inline_link_clicks';
   const url = `https://graph.facebook.com/v22.0/${accountId}/insights?level=ad&fields=${campos}&${timeParam}&limit=500&access_token=${token}`;
 
   const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
@@ -530,7 +530,8 @@ function extraerTodosLosRangos() {
   const headers = [
     'TIPO', 'RANGO', 'CAMPAÑA', 'CONJUNTO', 'ANUNCIO', 'AD ID', 'PAÍS', 'ESTADO', 'PRESUPUESTO',
     'GASTO', 'IGV', 'GASTO TOTAL', 'FACT USD', 'ROAS', 'UTILIDAD', 'ROI',
-    'ALCANCE', 'CLICS ÚNICOS', 'MENSAJES', 'CPM', '# VENTAS', 'T.C.', 'IMPRESIONES'
+    'IMPRESIONES', 'ALCANCE', 'CLICS ÚNICOS', 'COSTO POR CLIC', 'MENSAJES', '% MENSAJES', 'COSTO POR MENSAJE',
+    '# VENTAS', 'CVR', 'COSTO POR COMPRA', 'CPM', 'T.C.'
   ];
   hoja.getRange(1, 1, 1, headers.length)
       .setValues([headers])
@@ -593,13 +594,13 @@ function extraerTodosLosRangos() {
           const igv = gasto * 0.18;
           const gastoTotal = gasto + igv;
           const alcance = parseInt(item.reach) || 0;
-          const clicsUnicos = parseInt(item.unique_clicks) || 0;
+          const clicsUnicos = parseInt(item.unique_inline_link_clicks) || 0;
           const impresiones = parseInt(item.impressions) || 0;
           const cpm = impresiones > 0 ? (gasto / impresiones) * 1000 : 0;
 
-          // LOG: Ver primer item para debug de clics únicos
+          // LOG: Ver primer item para debug de clics únicos en enlace
           if (itemIdx === 0) {
-            Logger.log(`Primer anuncio - unique_clicks: ${item.unique_clicks}, clicsUnicos: ${clicsUnicos}`);
+            Logger.log(`Primer anuncio - unique_inline_link_clicks: ${item.unique_inline_link_clicks}, clicsUnicos: ${clicsUnicos}`);
           }
 
           // Obtener datos adicionales del item
@@ -636,6 +637,13 @@ function extraerTodosLosRangos() {
           const utilidad = factUSD - gastoTotal;
           const roi = gastoTotal > 0 ? utilidad / gastoTotal : 0;
 
+          // Nuevos cálculos
+          const costoPorClic = clicsUnicos > 0 ? gastoTotal / clicsUnicos : 0;
+          const porcentajeMensajes = clicsUnicos > 0 ? numMensajes / clicsUnicos : 0;
+          const costoPorMensaje = numMensajes > 0 ? gastoTotal / numMensajes : 0;
+          const cvr = numMensajes > 0 ? numVentas / numMensajes : 0;
+          const costoPorCompra = numVentas > 0 ? gastoTotal / numVentas : 0;
+
           datosPorRango[rangoConfig.nombre].filas.push([
             'DATO',
             rangoConfig.nombre,
@@ -653,13 +661,18 @@ function extraerTodosLosRangos() {
             roas,
             utilidad,
             roi,
+            impresiones,
             alcance,
             clicsUnicos,
+            costoPorClic,
             numMensajes,
-            cpm,
+            porcentajeMensajes,
+            costoPorMensaje,
             numVentas,
-            tasaCambio,
-            impresiones
+            cvr,
+            costoPorCompra,
+            cpm,
+            tasaCambio
           ]);
 
           // Acumular totales
@@ -691,11 +704,18 @@ function extraerTodosLosRangos() {
       // Agregar filas de datos
       todosLosResultados = todosLosResultados.concat(datos.filas);
 
-      // Calcular CPM, ROAS y ROI de los totales
+      // Calcular métricas de los totales
       const totales = datos.totales;
       const cpmTotal = totales.impresiones > 0 ? (totales.gasto / totales.impresiones) * 1000 : 0;
       const roasTotal = totales.gastoTotal > 0 ? totales.factUSD / totales.gastoTotal : 0;
       const roiTotal = totales.gastoTotal > 0 ? totales.utilidad / totales.gastoTotal : 0;
+
+      // Nuevos cálculos de totales
+      const costoPorClicTotal = totales.clics > 0 ? totales.gastoTotal / totales.clics : 0;
+      const porcentajeMensajesTotal = totales.clics > 0 ? totales.mensajes / totales.clics : 0;
+      const costoPorMensajeTotal = totales.mensajes > 0 ? totales.gastoTotal / totales.mensajes : 0;
+      const cvrTotal = totales.mensajes > 0 ? totales.numVentas / totales.mensajes : 0;
+      const costoPorCompraTotal = totales.numVentas > 0 ? totales.gastoTotal / totales.numVentas : 0;
 
       // Agregar fila de totales (con nuevas columnas)
       todosLosResultados.push([
@@ -711,13 +731,18 @@ function extraerTodosLosRangos() {
         roasTotal,
         totales.utilidad,
         roiTotal,
+        totales.impresiones,
         totales.alcance,
         totales.clics,        // CLICS ÚNICOS
+        costoPorClicTotal,
         totales.mensajes,     // MENSAJES
-        cpmTotal,
+        porcentajeMensajesTotal,
+        costoPorMensajeTotal,
         totales.numVentas,
-        '',  // T.C. vacío en totales
-        totales.impresiones
+        cvrTotal,
+        costoPorCompraTotal,
+        cpmTotal,
+        ''  // T.C. vacío en totales
       ]);
     }
   });
@@ -726,7 +751,7 @@ function extraerTodosLosRangos() {
   if (todosLosResultados.length > 0) {
     hoja.getRange(2, 1, todosLosResultados.length, headers.length).setValues(todosLosResultados);
 
-    // Formatear columnas (ajustado para nuevas columnas)
+    // Formatear columnas (ajustado para nuevas columnas reorganizadas)
     hoja.getRange(2, 9, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');    // PRESUPUESTO
     hoja.getRange(2, 10, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // GASTO
     hoja.getRange(2, 11, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // IGV
@@ -735,13 +760,18 @@ function extraerTodosLosRangos() {
     hoja.getRange(2, 14, todosLosResultados.length, 1).setNumberFormat('0.00');        // ROAS
     hoja.getRange(2, 15, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // UTILIDAD
     hoja.getRange(2, 16, todosLosResultados.length, 1).setNumberFormat('0.00%');       // ROI
-    hoja.getRange(2, 17, todosLosResultados.length, 1).setNumberFormat('#,##0');       // ALCANCE
-    hoja.getRange(2, 18, todosLosResultados.length, 1).setNumberFormat('#,##0');       // CLICS ÚNICOS
-    hoja.getRange(2, 19, todosLosResultados.length, 1).setNumberFormat('#,##0');       // MENSAJES
-    hoja.getRange(2, 20, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // CPM
-    hoja.getRange(2, 21, todosLosResultados.length, 1).setNumberFormat('#,##0');       // # VENTAS
-    hoja.getRange(2, 22, todosLosResultados.length, 1).setNumberFormat('0.00');        // T.C.
-    hoja.getRange(2, 23, todosLosResultados.length, 1).setNumberFormat('#,##0');       // IMPRESIONES
+    hoja.getRange(2, 17, todosLosResultados.length, 1).setNumberFormat('#,##0');       // IMPRESIONES
+    hoja.getRange(2, 18, todosLosResultados.length, 1).setNumberFormat('#,##0');       // ALCANCE
+    hoja.getRange(2, 19, todosLosResultados.length, 1).setNumberFormat('#,##0');       // CLICS ÚNICOS
+    hoja.getRange(2, 20, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // COSTO POR CLIC
+    hoja.getRange(2, 21, todosLosResultados.length, 1).setNumberFormat('#,##0');       // MENSAJES
+    hoja.getRange(2, 22, todosLosResultados.length, 1).setNumberFormat('0.00%');       // % MENSAJES
+    hoja.getRange(2, 23, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // COSTO POR MENSAJE
+    hoja.getRange(2, 24, todosLosResultados.length, 1).setNumberFormat('#,##0');       // # VENTAS
+    hoja.getRange(2, 25, todosLosResultados.length, 1).setNumberFormat('0.00%');       // CVR
+    hoja.getRange(2, 26, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // COSTO POR COMPRA
+    hoja.getRange(2, 27, todosLosResultados.length, 1).setNumberFormat('$#,##0.00');   // CPM
+    hoja.getRange(2, 28, todosLosResultados.length, 1).setNumberFormat('0.00');        // T.C.
 
     // Colorear filas por rango
     const colores = {
@@ -802,12 +832,17 @@ function extraerTodosLosRangos() {
     const formulaROAS = `=IF(L${filaTotal}>0,M${filaTotal}/L${filaTotal},0)`;
     const formulaUtilidad = `=SUBTOTAL(109,O${primeraFilaDatos}:O${ultimaFilaDatos})`;
     const formulaROI = `=IF(L${filaTotal}>0,O${filaTotal}/L${filaTotal},0)`;
-    const formulaAlcance = `=SUBTOTAL(109,Q${primeraFilaDatos}:Q${ultimaFilaDatos})`;
-    const formulaClicsUnicos = `=SUBTOTAL(109,R${primeraFilaDatos}:R${ultimaFilaDatos})`;
-    const formulaMensajes = `=SUBTOTAL(109,S${primeraFilaDatos}:S${ultimaFilaDatos})`;
-    const formulaCPM = `=IF(W${filaTotal}>0,(J${filaTotal}/W${filaTotal})*1000,0)`;
-    const formulaVentas = `=SUBTOTAL(109,U${primeraFilaDatos}:U${ultimaFilaDatos})`;
-    const formulaImpresiones = `=SUBTOTAL(109,W${primeraFilaDatos}:W${ultimaFilaDatos})`;
+    const formulaImpresiones = `=SUBTOTAL(109,Q${primeraFilaDatos}:Q${ultimaFilaDatos})`;
+    const formulaAlcance = `=SUBTOTAL(109,R${primeraFilaDatos}:R${ultimaFilaDatos})`;
+    const formulaClicsUnicos = `=SUBTOTAL(109,S${primeraFilaDatos}:S${ultimaFilaDatos})`;
+    const formulaCostoPorClic = `=IF(S${filaTotal}>0,L${filaTotal}/S${filaTotal},0)`;
+    const formulaMensajes = `=SUBTOTAL(109,U${primeraFilaDatos}:U${ultimaFilaDatos})`;
+    const formulaPorcentajeMensajes = `=IF(S${filaTotal}>0,U${filaTotal}/S${filaTotal},0)`;
+    const formulaCostoPorMensaje = `=IF(U${filaTotal}>0,L${filaTotal}/U${filaTotal},0)`;
+    const formulaVentas = `=SUBTOTAL(109,X${primeraFilaDatos}:X${ultimaFilaDatos})`;
+    const formulaCVR = `=IF(U${filaTotal}>0,X${filaTotal}/U${filaTotal},0)`;
+    const formulaCostoPorCompra = `=IF(X${filaTotal}>0,L${filaTotal}/X${filaTotal},0)`;
+    const formulaCPM = `=IF(Q${filaTotal}>0,(J${filaTotal}/Q${filaTotal})*1000,0)`;
 
     hoja.getRange(filaTotal, 1, 1, headers.length).setValues([[
       '',
@@ -822,13 +857,18 @@ function extraerTodosLosRangos() {
       formulaROAS,
       formulaUtilidad,
       formulaROI,
+      formulaImpresiones,
       formulaAlcance,
       formulaClicsUnicos,
+      formulaCostoPorClic,
       formulaMensajes,
-      formulaCPM,
+      formulaPorcentajeMensajes,
+      formulaCostoPorMensaje,
       formulaVentas,
-      '',
-      formulaImpresiones
+      formulaCVR,
+      formulaCostoPorCompra,
+      formulaCPM,
+      ''
     ]]);
 
     // Formatear fila de total
@@ -846,12 +886,17 @@ function extraerTodosLosRangos() {
     hoja.getRange(filaTotal, 14).setNumberFormat('0.00');       // ROAS
     hoja.getRange(filaTotal, 15).setNumberFormat('$#,##0.00');  // UTILIDAD
     hoja.getRange(filaTotal, 16).setNumberFormat('0.00%');      // ROI
-    hoja.getRange(filaTotal, 17).setNumberFormat('#,##0');      // ALCANCE
-    hoja.getRange(filaTotal, 18).setNumberFormat('#,##0');      // CLICS ÚNICOS
-    hoja.getRange(filaTotal, 19).setNumberFormat('#,##0');      // MENSAJES
-    hoja.getRange(filaTotal, 20).setNumberFormat('$#,##0.00');  // CPM
-    hoja.getRange(filaTotal, 21).setNumberFormat('#,##0');      // # VENTAS
-    hoja.getRange(filaTotal, 23).setNumberFormat('#,##0');      // IMPRESIONES
+    hoja.getRange(filaTotal, 17).setNumberFormat('#,##0');      // IMPRESIONES
+    hoja.getRange(filaTotal, 18).setNumberFormat('#,##0');      // ALCANCE
+    hoja.getRange(filaTotal, 19).setNumberFormat('#,##0');      // CLICS ÚNICOS
+    hoja.getRange(filaTotal, 20).setNumberFormat('$#,##0.00');  // COSTO POR CLIC
+    hoja.getRange(filaTotal, 21).setNumberFormat('#,##0');      // MENSAJES
+    hoja.getRange(filaTotal, 22).setNumberFormat('0.00%');      // % MENSAJES
+    hoja.getRange(filaTotal, 23).setNumberFormat('$#,##0.00');  // COSTO POR MENSAJE
+    hoja.getRange(filaTotal, 24).setNumberFormat('#,##0');      // # VENTAS
+    hoja.getRange(filaTotal, 25).setNumberFormat('0.00%');      // CVR
+    hoja.getRange(filaTotal, 26).setNumberFormat('$#,##0.00');  // COSTO POR COMPRA
+    hoja.getRange(filaTotal, 27).setNumberFormat('$#,##0.00');  // CPM
 
     // Ocultar la columna TIPO (opcional, el usuario puede filtrar por ella)
     // hoja.hideColumns(1);
