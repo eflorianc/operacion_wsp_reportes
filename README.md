@@ -65,11 +65,7 @@ clasp open
 3. Ve a: **🏗️ Inicializar Sistema**
 
 Esto creará las hojas necesarias:
-- 🎨 Panel de Creativos
-- 📊 Dashboard
 - 📈 Datos Meta Ads
-- 💰 Datos Ventas
-- 🎯 Reporte General
 - ⚙️ Configuración
 
 ### 2. Configurar Token de Meta
@@ -126,20 +122,6 @@ Esto creará las hojas necesarias:
 ```
 📊 Reporte de Ventas → 💰 Solo Ventas
 ```
-
-### Extraer Datos por Producto
-
-```
-📊 Reporte de Ventas → 🎯 Extraer Gasto por Producto
-```
-
-Opciones de rangos:
-- `today` - Hoy
-- `yesterday` - Ayer
-- `last_3d` - Últimos 3 días
-- `last_7d` - Últimos 7 días
-- `last_30d` - Últimos 30 días
-- `maximum` - Histórico completo
 
 ### Extraer Todos los Rangos
 
@@ -210,9 +192,6 @@ Genera un reporte consolidado con múltiples rangos de tiempo en una sola tabla,
 
 ### `extraerTodosLosRangos()`
 Extrae datos de múltiples rangos de tiempo en una sola ejecución.
-
-### `extraerGastoPorAnuncio()`
-Extrae datos de anuncios con filtros de producto y rango personalizado.
 
 ### `actualizarReporteCompleto()`
 Actualiza tanto datos de Meta Ads como de ventas.

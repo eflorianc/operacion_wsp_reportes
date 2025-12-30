@@ -4,130 +4,6 @@
  */
 
 /**
- * Función principal para extraer gasto por anuncio
- */
-function extraerGastoPorAnuncio() {
-  const ui = SpreadsheetApp.getUi();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  // 1. Pedir Producto
-  const respProd = ui.prompt('🔍 Producto', 'Introduce el nombre (o déjalo vacío para todos):', ui.ButtonSet.OK_CANCEL);
-  if (respProd.getSelectedButton() !== ui.Button.OK) return;
-  const nombreProducto = respProd.getResponseText().trim();
-
-  // 2. Pedir Rango
-  const respFecha = ui.prompt(
-    '📅 Rango de Fechas',
-    'Opciones válidas:\n• today\n• yesterday\n• last_3d\n• last_7d\n• last_14d\n• last_30d\n• last_5d (personalizado)\n• maximum (histórico completo)',
-    ui.ButtonSet.OK_CANCEL
-  );
-  if (respFecha.getSelectedButton() !== ui.Button.OK) return;
-  const rango = respFecha.getResponseText().trim().toLowerCase();
-
-  // 3. Validar credenciales
-  const props = PropertiesService.getScriptProperties();
-  const token = props.getProperty('META_TOKEN');
-  const cuentas = JSON.parse(props.getProperty('META_CUENTAS') || '[]');
-
-  if (!token) {
-    ui.alert('❌ Error', 'No hay token de Meta configurado. Ve a Configuración > Configurar Token de Meta.', ui.ButtonSet.OK);
-    return;
-  }
-
-  if (cuentas.length === 0) {
-    ui.alert('❌ Error', 'No hay cuentas publicitarias configuradas. Ve a Configuración > Configurar Cuentas Publicitarias.', ui.ButtonSet.OK);
-    return;
-  }
-
-  // 4. Preparar hoja de resultados
-  let hoja = ss.getSheetByName('📈 Gasto por Anuncio');
-  if (!hoja) hoja = ss.insertSheet('📈 Gasto por Anuncio');
-  hoja.clear();
-
-  const headers = ['FILTRO', 'RANGO', 'CAMPAÑA', 'CONJUNTO', 'ANUNCIO', 'AD ID', 'GASTO', 'IGV', 'GASTO TOTAL', 'ALCANCE', 'CLICS', 'CPM', 'IMPRESIONES'];
-  hoja.getRange(1, 1, 1, headers.length)
-      .setValues([headers])
-      .setBackground('#4285f4')
-      .setFontColor('white')
-      .setFontWeight('bold');
-
-  // 5. Construir parámetro de tiempo
-  const timeParam = construirParametroTiempo(rango, ss.getSpreadsheetTimeZone());
-
-  if (!timeParam) {
-    ui.alert('❌ Error', 'Rango de fechas no válido: ' + rango, ui.ButtonSet.OK);
-    return;
-  }
-
-  // 6. Extracción de datos
-  let resultados = [];
-  let errores = [];
-
-  cuentas.forEach(cuenta => {
-    const accId = cuenta[0];
-    try {
-      const datos = extraerDatosDeCuenta(accId, token, timeParam, nombreProducto);
-      resultados = resultados.concat(datos.map(item => {
-        const gasto = parseFloat(item.spend) || 0;
-        const igv = gasto * 0.18;
-        const gastoTotal = gasto + igv;
-        const alcance = parseInt(item.reach) || 0;
-        const clics = parseInt(item.clicks) || 0;
-        const impresiones = parseInt(item.impressions) || 0;
-        const cpm = impresiones > 0 ? (gasto / impresiones) * 1000 : 0;
-
-        return [
-          nombreProducto || 'TODOS',
-          rango.toUpperCase(),
-          item.campaign_name || '',
-          item.adset_name || '',
-          item.ad_name || '',
-          item.ad_id || '',
-          gasto,
-          igv,
-          gastoTotal,
-          alcance,
-          clics,
-          cpm,
-          impresiones
-        ];
-      }));
-    } catch (e) {
-      errores.push(`Cuenta ${accId}: ${e.message}`);
-      Logger.log(`Error en cuenta ${accId}: ${e.message}`);
-    }
-  });
-
-  // 7. Escribir resultados
-  if (resultados.length > 0) {
-    hoja.getRange(2, 1, resultados.length, headers.length).setValues(resultados);
-
-    // Formatear columnas numéricas
-    hoja.getRange(2, 7, resultados.length, 1).setNumberFormat('$#,##0.00');  // GASTO
-    hoja.getRange(2, 8, resultados.length, 1).setNumberFormat('$#,##0.00');  // IGV
-    hoja.getRange(2, 9, resultados.length, 1).setNumberFormat('$#,##0.00');  // GASTO TOTAL
-    hoja.getRange(2, 10, resultados.length, 2).setNumberFormat('#,##0');     // ALCANCE, CLICS
-    hoja.getRange(2, 12, resultados.length, 1).setNumberFormat('$#,##0.00'); // CPM
-    hoja.getRange(2, 13, resultados.length, 1).setNumberFormat('#,##0');     // IMPRESIONES
-
-    // Ajustar anchos de columna
-    hoja.autoResizeColumns(1, headers.length);
-
-    let mensaje = `✅ Éxito: ${resultados.length} anuncios encontrados.`;
-    if (errores.length > 0) {
-      mensaje += `\n\n⚠️ Errores en ${errores.length} cuenta(s).`;
-    }
-    ui.alert('Extracción Completada', mensaje, ui.ButtonSet.OK);
-  } else {
-    let mensaje = '⚠️ No se encontraron datos para los criterios especificados.';
-    if (errores.length > 0) {
-      mensaje += '\n\nErrores:\n' + errores.join('\n');
-    }
-    ui.alert('Sin Resultados', mensaje, ui.ButtonSet.OK);
-  }
-}
-
-/**
  * Construye el parámetro de tiempo para la API de Meta
  * @param {string} rango - El rango seleccionado por el usuario
  * @param {string} timezone - Zona horaria del spreadsheet
@@ -919,6 +795,521 @@ function extraerTodosLosRangos() {
 
     ss.toast('', '', 1); // Cerrar toast
     ui.alert('Extracción Múltiple Completada', resumen, ui.ButtonSet.OK);
+  } else {
+    ss.toast('', '', 1);
+    let mensaje = '⚠️ No se encontraron datos.';
+    if (errores.length > 0) {
+      mensaje += '\n\nErrores:\n' + errores.slice(0, 5).join('\n');
+    }
+    ui.alert('Sin Resultados', mensaje, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Extrae reporte consolidado POR PRODUCTOS en lugar de por anuncios individuales
+ * Muestra métricas agrupadas por producto y rango de fechas
+ */
+function extraerReportePorProductos() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const props = PropertiesService.getScriptProperties();
+
+  const token = props.getProperty('META_TOKEN');
+  const cuentas = JSON.parse(props.getProperty('META_CUENTAS') || '[]');
+
+  if (!token) {
+    ui.alert('❌ Error', 'No hay token de Meta configurado.', ui.ButtonSet.OK);
+    return;
+  }
+
+  if (cuentas.length === 0) {
+    ui.alert('❌ Error', 'No hay cuentas publicitarias configuradas.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // 1. Seleccionar país
+  const paises = [
+    { num: 0, nombre: 'TODOS', filtro: '' },
+    { num: 1, nombre: 'PERU', filtro: 'peru' },
+    { num: 2, nombre: 'MEXICO', filtro: 'mexico' },
+    { num: 3, nombre: 'COLOMBIA', filtro: 'colombia' },
+    { num: 4, nombre: 'ARGENTINA', filtro: 'argentina' }
+  ];
+
+  const menuPaises = paises.map(p => `${p.num}. ${p.nombre}`).join('\n');
+  const respPais = ui.prompt(
+    '🌎 Seleccionar País',
+    `Ingresa el número del país:\n\n${menuPaises}`,
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (respPais.getSelectedButton() !== ui.Button.OK) return;
+
+  const numPais = parseInt(respPais.getResponseText().trim());
+  const paisSeleccionado = paises.find(p => p.num === numPais);
+
+  if (!paisSeleccionado) {
+    ui.alert('❌ Error', 'Número de país no válido.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const filtroPais = paisSeleccionado.filtro;
+
+  // 2. Obtener productos configurados
+  const config = obtenerConfiguracion();
+  const productosConfig = config.PRODUCTOS || {};
+
+  if (Object.keys(productosConfig).length === 0) {
+    ui.alert('❌ Error', 'No hay productos configurados. Ve a Configuración > Configurar Palabras Clave.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Preparar hoja
+  let hoja = ss.getSheetByName('📦 Reporte por Productos');
+  if (!hoja) hoja = ss.insertSheet('📦 Reporte por Productos');
+  hoja.clear();
+
+  // Quitar filtros existentes si los hay
+  if (hoja.getFilter()) {
+    hoja.getFilter().remove();
+  }
+
+  const headers = [
+    'TIPO', 'PRODUCTO', 'RANGO',
+    'GASTO', 'IGV', 'GASTO TOTAL', 'FACT USD', 'ROAS', 'UTILIDAD', 'ROI',
+    'IMPRESIONES', 'ALCANCE', 'CLICS ÚNICOS', 'COSTO POR CLIC',
+    'MENSAJES', '% MENSAJES', 'COSTO POR MENSAJE',
+    '# VENTAS', 'CVR', 'COSTO POR COMPRA', 'CPM'
+  ];
+
+  hoja.getRange(1, 1, 1, headers.length)
+      .setValues([headers])
+      .setBackground('#00796b')
+      .setFontColor('white')
+      .setFontWeight('bold')
+      .setHorizontalAlignment('center');
+
+  // Fijar la primera fila
+  hoja.setFrozenRows(1);
+
+  // Definir los rangos a extraer
+  const rangos = [
+    { nombre: 'HOY', param: 'date_preset=today' },
+    { nombre: 'AYER', param: 'date_preset=yesterday' },
+    { nombre: 'LAST_3D', param: 'date_preset=last_3d' },
+    { nombre: 'LAST_5D', param: construirTimeRange(5, ss.getSpreadsheetTimeZone()) },
+    { nombre: 'LAST_7D', param: 'date_preset=last_7d' },
+    { nombre: 'LAST_30D', param: 'date_preset=last_30d' },
+    { nombre: 'MAXIMUM', param: 'date_preset=maximum' }
+  ];
+
+  let todosLosResultados = [];
+  let errores = [];
+
+  // OPTIMIZACIÓN: Extraer TODOS los datos UNA SOLA VEZ por rango, luego filtrar localmente
+  ss.toast('Extrayendo datos de la API...', '⏳ Procesando', -1);
+
+  // Objeto para guardar todos los datos por rango
+  const datosPorRango = {};
+
+  // Paso 1: Extraer TODOS los datos de TODOS los rangos (una sola vez)
+  rangos.forEach((rangoConfig, index) => {
+    ss.toast(`Extrayendo rango ${index + 1}/${rangos.length}: ${rangoConfig.nombre}...`, '⏳ API', -1);
+
+    // Calcular fechas del rango
+    const fechasRango = calcularFechasDeRango(rangoConfig.nombre, ss.getSpreadsheetTimeZone());
+    const comprasPorAdId = obtenerComprasPorAdId(filtroPais, fechasRango.inicio, fechasRango.fin);
+    const mensajesPorAdId = obtenerMensajesPorAdId(filtroPais, fechasRango.inicio, fechasRango.fin);
+
+    datosPorRango[rangoConfig.nombre] = {
+      datos: [],
+      comprasPorAdId: comprasPorAdId,
+      mensajesPorAdId: mensajesPorAdId
+    };
+
+    // Extraer datos de todas las cuentas para este rango
+    cuentas.forEach(cuenta => {
+      try {
+        let datos = extraerDatosCompletoDeCuenta(cuenta[0], token, rangoConfig.param, '');
+
+        // Filtrar por país si es necesario
+        if (filtroPais) {
+          datos = datos.filter(item =>
+            item.campaign_name && item.campaign_name.toLowerCase().includes(filtroPais)
+          );
+        }
+
+        // Guardar todos los datos sin filtrar por producto
+        datosPorRango[rangoConfig.nombre].datos = datosPorRango[rangoConfig.nombre].datos.concat(datos);
+
+      } catch (e) {
+        errores.push(`${rangoConfig.nombre} - Cuenta ${cuenta[0]}: ${e.message}`);
+        Logger.log(`Error en rango ${rangoConfig.nombre}, cuenta ${cuenta[0]}: ${e.message}`);
+      }
+    });
+
+    Logger.log(`${rangoConfig.nombre}: ${datosPorRango[rangoConfig.nombre].datos.length} anuncios extraídos`);
+  });
+
+  // Paso 2: Procesar cada producto filtrando los datos ya obtenidos
+  ss.toast('Procesando productos...', '⏳ Calculando', -1);
+
+  let productoIndex = 0;
+  const numProductos = Object.keys(productosConfig).length;
+
+  for (const nombreProducto in productosConfig) {
+    productoIndex++;
+    const producto = productosConfig[nombreProducto];
+    const palabrasClave = producto.palabrasClave || [];
+    const paisProducto = producto.pais ? producto.pais.toLowerCase() : '';
+
+    // Filtrar por país si es necesario
+    if (filtroPais && paisProducto && paisProducto !== filtroPais) {
+      Logger.log(`Saltando producto "${nombreProducto}" porque es de "${paisProducto}" y se filtró por "${filtroPais}"`);
+      continue;
+    }
+
+    ss.toast(`Procesando producto ${productoIndex}/${numProductos}: ${nombreProducto}...`, '⏳ Calculando', -1);
+
+    // Para cada rango, filtrar datos localmente
+    rangos.forEach((rangoConfig) => {
+      const rangoData = datosPorRango[rangoConfig.nombre];
+      const comprasPorAdId = rangoData.comprasPorAdId;
+      const mensajesPorAdId = rangoData.mensajesPorAdId;
+
+      // Acumuladores para este producto+rango
+      let totales = {
+        gasto: 0,
+        igv: 0,
+        gastoTotal: 0,
+        alcance: 0,
+        clics: 0,
+        mensajes: 0,
+        factUSD: 0,
+        numVentas: 0,
+        utilidad: 0,
+        impresiones: 0
+      };
+
+      // Filtrar datos por palabras clave del producto
+      const datosFiltrados = rangoData.datos.filter(item => {
+        if (!item.campaign_name) return false;
+        const campaignNameUpper = item.campaign_name.toUpperCase();
+        // El anuncio coincide si contiene ALGUNA de las palabras clave
+        return palabrasClave.some(keyword =>
+          campaignNameUpper.includes(keyword.toUpperCase())
+        );
+      });
+
+      // Agregar métricas de los datos filtrados
+      datosFiltrados.forEach(item => {
+        const gasto = parseFloat(item.spend) || 0;
+        const igv = gasto * 0.18;
+        const gastoTotal = gasto + igv;
+        const alcance = parseInt(item.reach) || 0;
+        const clicsUnicos = parseInt(item.unique_inline_link_clicks) || 0;
+        const impresiones = parseInt(item.impressions) || 0;
+
+        const adId = item.ad_id || '';
+        let factUSD = 0;
+        let numVentas = 0;
+        let numMensajes = 0;
+
+        // Vincular compras y mensajes
+        if (adId && comprasPorAdId[adId]) {
+          const compra = comprasPorAdId[adId];
+          factUSD = compra.totalUSD;
+          numVentas = compra.cantidadVentas;
+        }
+
+        if (adId && mensajesPorAdId[adId]) {
+          numMensajes = mensajesPorAdId[adId].cantidadMensajes;
+        }
+
+        const utilidad = factUSD - gastoTotal;
+
+        // Acumular totales
+        totales.gasto += gasto;
+        totales.igv += igv;
+        totales.gastoTotal += gastoTotal;
+        totales.alcance += alcance;
+        totales.clics += clicsUnicos;
+        totales.mensajes += numMensajes;
+        totales.factUSD += factUSD;
+        totales.numVentas += numVentas;
+        totales.utilidad += utilidad;
+        totales.impresiones += impresiones;
+      });
+
+      // Solo agregar fila si hay datos
+      if (totales.gastoTotal > 0 || totales.alcance > 0) {
+        // Calcular métricas finales
+        const roas = totales.gastoTotal > 0 ? totales.factUSD / totales.gastoTotal : 0;
+        const roi = totales.gastoTotal > 0 ? totales.utilidad / totales.gastoTotal : 0;
+        const cpm = totales.impresiones > 0 ? (totales.gasto / totales.impresiones) * 1000 : 0;
+        const costoPorClic = totales.clics > 0 ? totales.gastoTotal / totales.clics : 0;
+        const porcentajeMensajes = totales.clics > 0 ? totales.mensajes / totales.clics : 0;
+        const costoPorMensaje = totales.mensajes > 0 ? totales.gastoTotal / totales.mensajes : 0;
+        const cvr = totales.mensajes > 0 ? totales.numVentas / totales.mensajes : 0;
+        const costoPorCompra = totales.numVentas > 0 ? totales.gastoTotal / totales.numVentas : 0;
+
+        todosLosResultados.push([
+          'DATO',
+          nombreProducto,
+          rangoConfig.nombre,
+          totales.gasto,
+          totales.igv,
+          totales.gastoTotal,
+          totales.factUSD,
+          roas,
+          totales.utilidad,
+          roi,
+          totales.impresiones,
+          totales.alcance,
+          totales.clics,
+          costoPorClic,
+          totales.mensajes,
+          porcentajeMensajes,
+          costoPorMensaje,
+          totales.numVentas,
+          cvr,
+          costoPorCompra,
+          cpm
+        ]);
+      }
+    });
+  }
+
+  // Agrupar por rango para calcular totales
+  const totalesPorRango = {};
+  rangos.forEach(r => {
+    totalesPorRango[r.nombre] = {
+      gasto: 0, igv: 0, gastoTotal: 0, alcance: 0, clics: 0, mensajes: 0,
+      factUSD: 0, numVentas: 0, utilidad: 0, impresiones: 0
+    };
+  });
+
+  todosLosResultados.forEach(fila => {
+    const rango = fila[2];
+    if (totalesPorRango[rango]) {
+      totalesPorRango[rango].gasto += fila[3];
+      totalesPorRango[rango].igv += fila[4];
+      totalesPorRango[rango].gastoTotal += fila[5];
+      totalesPorRango[rango].factUSD += fila[6];
+      totalesPorRango[rango].utilidad += fila[8];
+      totalesPorRango[rango].impresiones += fila[10];
+      totalesPorRango[rango].alcance += fila[11];
+      totalesPorRango[rango].clics += fila[12];
+      totalesPorRango[rango].mensajes += fila[14];
+      totalesPorRango[rango].numVentas += fila[17];
+    }
+  });
+
+  // Insertar filas de totales por rango
+  const resultadosConTotales = [];
+  rangos.forEach(rangoConfig => {
+    // Agregar filas de datos de este rango
+    const filasDatos = todosLosResultados.filter(f => f[2] === rangoConfig.nombre);
+    resultadosConTotales.push(...filasDatos);
+
+    // Agregar fila de total si hay datos
+    if (filasDatos.length > 0) {
+      const totales = totalesPorRango[rangoConfig.nombre];
+      const roas = totales.gastoTotal > 0 ? totales.factUSD / totales.gastoTotal : 0;
+      const roi = totales.gastoTotal > 0 ? totales.utilidad / totales.gastoTotal : 0;
+      const cpm = totales.impresiones > 0 ? (totales.gasto / totales.impresiones) * 1000 : 0;
+      const costoPorClic = totales.clics > 0 ? totales.gastoTotal / totales.clics : 0;
+      const porcentajeMensajes = totales.clics > 0 ? totales.mensajes / totales.clics : 0;
+      const costoPorMensaje = totales.mensajes > 0 ? totales.gastoTotal / totales.mensajes : 0;
+      const cvr = totales.mensajes > 0 ? totales.numVentas / totales.mensajes : 0;
+      const costoPorCompra = totales.numVentas > 0 ? totales.gastoTotal / totales.numVentas : 0;
+
+      resultadosConTotales.push([
+        'TOTAL',
+        `TOTAL ${rangoConfig.nombre}`,
+        rangoConfig.nombre,
+        totales.gasto,
+        totales.igv,
+        totales.gastoTotal,
+        totales.factUSD,
+        roas,
+        totales.utilidad,
+        roi,
+        totales.impresiones,
+        totales.alcance,
+        totales.clics,
+        costoPorClic,
+        totales.mensajes,
+        porcentajeMensajes,
+        costoPorMensaje,
+        totales.numVentas,
+        cvr,
+        costoPorCompra,
+        cpm
+      ]);
+    }
+  });
+
+  // Escribir resultados
+  if (resultadosConTotales.length > 0) {
+    hoja.getRange(2, 1, resultadosConTotales.length, headers.length).setValues(resultadosConTotales);
+
+    // Formatear columnas
+    hoja.getRange(2, 4, resultadosConTotales.length, 1).setNumberFormat('$#,##0.00');   // GASTO
+    hoja.getRange(2, 5, resultadosConTotales.length, 1).setNumberFormat('$#,##0.00');   // IGV
+    hoja.getRange(2, 6, resultadosConTotales.length, 1).setNumberFormat('$#,##0.00');   // GASTO TOTAL
+    hoja.getRange(2, 7, resultadosConTotales.length, 1).setNumberFormat('$#,##0.00');   // FACT USD
+    hoja.getRange(2, 8, resultadosConTotales.length, 1).setNumberFormat('0.00');        // ROAS
+    hoja.getRange(2, 9, resultadosConTotales.length, 1).setNumberFormat('$#,##0.00');   // UTILIDAD
+    hoja.getRange(2, 10, resultadosConTotales.length, 1).setNumberFormat('0.00%');      // ROI
+    hoja.getRange(2, 11, resultadosConTotales.length, 1).setNumberFormat('#,##0');      // IMPRESIONES
+    hoja.getRange(2, 12, resultadosConTotales.length, 1).setNumberFormat('#,##0');      // ALCANCE
+    hoja.getRange(2, 13, resultadosConTotales.length, 1).setNumberFormat('#,##0');      // CLICS ÚNICOS
+    hoja.getRange(2, 14, resultadosConTotales.length, 1).setNumberFormat('$#,##0.00');  // COSTO POR CLIC
+    hoja.getRange(2, 15, resultadosConTotales.length, 1).setNumberFormat('#,##0');      // MENSAJES
+    hoja.getRange(2, 16, resultadosConTotales.length, 1).setNumberFormat('0.00%');      // % MENSAJES
+    hoja.getRange(2, 17, resultadosConTotales.length, 1).setNumberFormat('$#,##0.00');  // COSTO POR MENSAJE
+    hoja.getRange(2, 18, resultadosConTotales.length, 1).setNumberFormat('#,##0');      // # VENTAS
+    hoja.getRange(2, 19, resultadosConTotales.length, 1).setNumberFormat('0.00%');      // CVR
+    hoja.getRange(2, 20, resultadosConTotales.length, 1).setNumberFormat('$#,##0.00');  // COSTO POR COMPRA
+    hoja.getRange(2, 21, resultadosConTotales.length, 1).setNumberFormat('$#,##0.00');  // CPM
+
+    // Colorear filas por rango
+    const colores = {
+      'HOY': '#e8f5e9',
+      'AYER': '#fff3e0',
+      'LAST_3D': '#e3f2fd',
+      'LAST_5D': '#fce4ec',
+      'LAST_7D': '#e0f7fa',
+      'LAST_30D': '#fff8e1',
+      'MAXIMUM': '#f3e5f5'
+    };
+
+    const coloresTotales = {
+      'HOY': '#a5d6a7',
+      'AYER': '#ffcc80',
+      'LAST_3D': '#90caf9',
+      'LAST_5D': '#f48fb1',
+      'LAST_7D': '#80deea',
+      'LAST_30D': '#ffe082',
+      'MAXIMUM': '#ce93d8'
+    };
+
+    resultadosConTotales.forEach((fila, i) => {
+      const tipo = fila[0];
+      const rango = fila[2];
+      const rowRange = hoja.getRange(i + 2, 1, 1, headers.length);
+
+      if (tipo === 'TOTAL') {
+        const colorTotal = coloresTotales[rango] || '#bdbdbd';
+        rowRange.setBackground(colorTotal)
+                .setFontWeight('bold')
+                .setBorder(true, null, true, null, null, null, '#666666', SpreadsheetApp.BorderStyle.SOLID);
+      } else {
+        const color = colores[rango] || '#ffffff';
+        rowRange.setBackground(color);
+      }
+    });
+
+    // Agregar filtro automático
+    const rangoFiltro = hoja.getRange(1, 1, resultadosConTotales.length + 1, headers.length);
+    rangoFiltro.createFilter();
+
+    // Agregar TOTAL GENERAL con fórmulas SUBTOTAL
+    const filaTotal = resultadosConTotales.length + 2;
+    const primeraFilaDatos = 2;
+    const ultimaFilaDatos = resultadosConTotales.length + 1;
+
+    const formulaGasto = `=SUBTOTAL(109,D${primeraFilaDatos}:D${ultimaFilaDatos})`;
+    const formulaIGV = `=SUBTOTAL(109,E${primeraFilaDatos}:E${ultimaFilaDatos})`;
+    const formulaGastoTotal = `=SUBTOTAL(109,F${primeraFilaDatos}:F${ultimaFilaDatos})`;
+    const formulaFactUSD = `=SUBTOTAL(109,G${primeraFilaDatos}:G${ultimaFilaDatos})`;
+    const formulaROAS = `=IF(F${filaTotal}>0,G${filaTotal}/F${filaTotal},0)`;
+    const formulaUtilidad = `=SUBTOTAL(109,I${primeraFilaDatos}:I${ultimaFilaDatos})`;
+    const formulaROI = `=IF(F${filaTotal}>0,I${filaTotal}/F${filaTotal},0)`;
+    const formulaImpresiones = `=SUBTOTAL(109,K${primeraFilaDatos}:K${ultimaFilaDatos})`;
+    const formulaAlcance = `=SUBTOTAL(109,L${primeraFilaDatos}:L${ultimaFilaDatos})`;
+    const formulaClicsUnicos = `=SUBTOTAL(109,M${primeraFilaDatos}:M${ultimaFilaDatos})`;
+    const formulaCostoPorClic = `=IF(M${filaTotal}>0,F${filaTotal}/M${filaTotal},0)`;
+    const formulaMensajes = `=SUBTOTAL(109,O${primeraFilaDatos}:O${ultimaFilaDatos})`;
+    const formulaPorcentajeMensajes = `=IF(M${filaTotal}>0,O${filaTotal}/M${filaTotal},0)`;
+    const formulaCostoPorMensaje = `=IF(O${filaTotal}>0,F${filaTotal}/O${filaTotal},0)`;
+    const formulaVentas = `=SUBTOTAL(109,R${primeraFilaDatos}:R${ultimaFilaDatos})`;
+    const formulaCVR = `=IF(O${filaTotal}>0,R${filaTotal}/O${filaTotal},0)`;
+    const formulaCostoPorCompra = `=IF(R${filaTotal}>0,F${filaTotal}/R${filaTotal},0)`;
+    const formulaCPM = `=IF(K${filaTotal}>0,(D${filaTotal}/K${filaTotal})*1000,0)`;
+
+    hoja.getRange(filaTotal, 1, 1, headers.length).setValues([[
+      '',
+      'TOTAL GENERAL',
+      '(se actualiza con filtros)',
+      formulaGasto,
+      formulaIGV,
+      formulaGastoTotal,
+      formulaFactUSD,
+      formulaROAS,
+      formulaUtilidad,
+      formulaROI,
+      formulaImpresiones,
+      formulaAlcance,
+      formulaClicsUnicos,
+      formulaCostoPorClic,
+      formulaMensajes,
+      formulaPorcentajeMensajes,
+      formulaCostoPorMensaje,
+      formulaVentas,
+      formulaCVR,
+      formulaCostoPorCompra,
+      formulaCPM
+    ]]);
+
+    // Formatear fila de total general
+    const rangoTotal = hoja.getRange(filaTotal, 1, 1, headers.length);
+    rangoTotal.setBackground('#004d40')
+              .setFontColor('white')
+              .setFontWeight('bold')
+              .setBorder(true, true, true, true, null, null, 'white', SpreadsheetApp.BorderStyle.SOLID_THICK);
+
+    hoja.getRange(filaTotal, 4).setNumberFormat('$#,##0.00');   // GASTO
+    hoja.getRange(filaTotal, 5).setNumberFormat('$#,##0.00');   // IGV
+    hoja.getRange(filaTotal, 6).setNumberFormat('$#,##0.00');   // GASTO TOTAL
+    hoja.getRange(filaTotal, 7).setNumberFormat('$#,##0.00');   // FACT USD
+    hoja.getRange(filaTotal, 8).setNumberFormat('0.00');        // ROAS
+    hoja.getRange(filaTotal, 9).setNumberFormat('$#,##0.00');   // UTILIDAD
+    hoja.getRange(filaTotal, 10).setNumberFormat('0.00%');      // ROI
+    hoja.getRange(filaTotal, 11).setNumberFormat('#,##0');      // IMPRESIONES
+    hoja.getRange(filaTotal, 12).setNumberFormat('#,##0');      // ALCANCE
+    hoja.getRange(filaTotal, 13).setNumberFormat('#,##0');      // CLICS ÚNICOS
+    hoja.getRange(filaTotal, 14).setNumberFormat('$#,##0.00');  // COSTO POR CLIC
+    hoja.getRange(filaTotal, 15).setNumberFormat('#,##0');      // MENSAJES
+    hoja.getRange(filaTotal, 16).setNumberFormat('0.00%');      // % MENSAJES
+    hoja.getRange(filaTotal, 17).setNumberFormat('$#,##0.00');  // COSTO POR MENSAJE
+    hoja.getRange(filaTotal, 18).setNumberFormat('#,##0');      // # VENTAS
+    hoja.getRange(filaTotal, 19).setNumberFormat('0.00%');      // CVR
+    hoja.getRange(filaTotal, 20).setNumberFormat('$#,##0.00');  // COSTO POR COMPRA
+    hoja.getRange(filaTotal, 21).setNumberFormat('$#,##0.00');  // CPM
+
+    hoja.autoResizeColumns(1, headers.length);
+    hoja.setColumnWidth(1, 60); // Columna TIPO más angosta
+
+    // Resumen
+    const numProductos = Object.keys(productosConfig).filter(p => {
+      const prod = productosConfig[p];
+      const paisProd = prod.pais ? prod.pais.toLowerCase() : '';
+      return !filtroPais || !paisProd || paisProd === filtroPais;
+    }).length;
+
+    let resumen = `✅ Reporte por Productos completado\n\n`;
+    resumen += `🌎 País: ${paisSeleccionado.nombre}\n`;
+    resumen += `📦 Productos analizados: ${numProductos}\n`;
+    resumen += `📊 Rangos: ${rangos.length}\n`;
+    resumen += `📈 Total de filas: ${resultadosConTotales.length}`;
+
+    if (errores.length > 0) {
+      resumen += `\n\n⚠️ ${errores.length} error(es) encontrados.`;
+    }
+
+    ss.toast('', '', 1); // Cerrar toast
+    ui.alert('Reporte Completado', resumen, ui.ButtonSet.OK);
   } else {
     ss.toast('', '', 1);
     let mensaje = '⚠️ No se encontraron datos.';

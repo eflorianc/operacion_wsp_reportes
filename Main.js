@@ -11,12 +11,8 @@ function onOpen() {
     .addSeparator()
     .addItem('📈 Solo Meta Ads', 'actualizarDatosMeta')
     .addItem('💰 Solo Ventas', 'actualizarDatosVentas')
-    .addItem('🎯 Extraer Gasto por Producto', 'extraerGastoPorAnuncio')
     .addItem('📊 Extraer TODOS los Rangos', 'extraerTodosLosRangos')
-    // --- NUEVO PUNTO 6: ACCESO AL ANALIZADOR DE CREATIVOS ---
-    .addSeparator()
-    .addItem('🎨 Panel de Creativos (Ad-Level)', 'runCreativeAnalysis') // Llama a la nueva función
-    // --------------------------------------------------------
+    .addItem('📦 Reporte por Productos', 'extraerReportePorProductos')
     .addSeparator()
     .addSubMenu(ui.createMenu('🔍 Diagnósticos')
       .addItem('🛒 Consultar Ventas por Producto', 'consultarVentasPorProducto')
@@ -85,12 +81,7 @@ function instalarSistema() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   const hojas = [
-    // Agregar la nueva hoja al inicializador para que siempre exista
-    { nombre: '🎨 Panel de Creativos', color: '#6aa84f' },
-    { nombre: '📊 Dashboard', color: '#4285f4' },
     { nombre: '📈 Datos Meta Ads', color: '#34a853' },
-    { nombre: '💰 Datos Ventas', color: '#fbbc04' },
-    { nombre: '🎯 Reporte General', color: '#ea4335' },
     { nombre: '⚙️ Configuración', color: '#9e9e9e' }
   ];
 
@@ -104,17 +95,4 @@ function instalarSistema() {
   actualizarHojaConfiguracion();
 
   SpreadsheetApp.getUi().alert('✅ Sistema Instalado con Panel de Configuración');
-}
-
-/**
- * Función para ejecutar análisis de creativos (Ad-Level)
- * TODO: Implementar la lógica de análisis de creativos
- */
-function runCreativeAnalysis() {
-  const ui = SpreadsheetApp.getUi();
-  ui.alert(
-    '🎨 Panel de Creativos',
-    'Esta funcionalidad está en desarrollo.\n\nPróximamente podrás analizar el rendimiento de tus creativos a nivel de anuncio.',
-    ui.ButtonSet.OK
-  );
 }
