@@ -203,18 +203,23 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
         muteHttpExceptions: true
       });
 
-      if (response.getResponseCode() === 200) {
-        return JSON.parse(response.getContentText());
+      const responseCode = response.getResponseCode();
+      if (responseCode === 200) {
+        const results = JSON.parse(response.getContentText());
+        Logger.log(`Batch ejecutado exitosamente: ${results.length} resultados`);
+        return results;
       } else {
-        Logger.log('Error en batch: ' + response.getContentText());
+        const errorText = response.getContentText();
+        Logger.log(`Error en batch (HTTP ${responseCode}): ${errorText}`);
       }
     } catch (e) {
-      Logger.log('Error ejecutando batch: ' + e.message);
+      Logger.log(`Error ejecutando batch: ${e.message}, Stack: ${e.stack}`);
     }
     return [];
   }
 
   // Obtener estados de ads en batches de 50
+  Logger.log(`Procesando ${adsUnicos.length} ads únicos en batches de 50...`);
   for (let i = 0; i < adsUnicos.length; i += 50) {
     const batch = adsUnicos.slice(i, i + 50);
     const requests = batch.map(adId => ({
@@ -225,20 +230,25 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
     const results = ejecutarBatch(requests, token);
 
     results.forEach((result, idx) => {
+      const adId = batch[idx];
       if (result && result.code === 200) {
         try {
           const data = JSON.parse(result.body);
-          adCache[batch[idx]] = data.effective_status || 'UNKNOWN';
+          adCache[adId] = data.effective_status || 'UNKNOWN';
         } catch (e) {
-          adCache[batch[idx]] = 'UNKNOWN';
+          Logger.log(`Error parseando ad ${adId}: ${e.message}`);
+          adCache[adId] = 'UNKNOWN';
         }
       } else {
-        adCache[batch[idx]] = 'UNKNOWN';
+        const errorMsg = result ? `code=${result.code}, body=${result.body}` : 'result null';
+        Logger.log(`Error en batch request para ad ${adId}: ${errorMsg}`);
+        adCache[adId] = 'UNKNOWN';
       }
     });
   }
 
   // Obtener estados y presupuestos de adsets en batches de 50
+  Logger.log(`Procesando ${adsetsUnicos.length} adsets únicos en batches de 50...`);
   for (let i = 0; i < adsetsUnicos.length; i += 50) {
     const batch = adsetsUnicos.slice(i, i + 50);
     const requests = batch.map(adsetId => ({
@@ -249,6 +259,7 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
     const results = ejecutarBatch(requests, token);
 
     results.forEach((result, idx) => {
+      const adsetId = batch[idx];
       if (result && result.code === 200) {
         try {
           const data = JSON.parse(result.body);
@@ -260,20 +271,27 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
             presupuesto = parseFloat(data.lifetime_budget) / 100;
           }
 
-          adsetCache[batch[idx]] = {
+          adsetCache[adsetId] = {
             status: data.effective_status || 'UNKNOWN',
             presupuesto: presupuesto
           };
+
+          // LOG: Datos del adset para debugging
+          Logger.log(`Adset ${adsetId}: status=${data.effective_status}, daily_budget=${data.daily_budget}, lifetime_budget=${data.lifetime_budget}, presupuesto final=${presupuesto}`);
         } catch (e) {
-          adsetCache[batch[idx]] = { status: 'UNKNOWN', presupuesto: 0 };
+          Logger.log(`Error parseando adset ${adsetId}: ${e.message}`);
+          adsetCache[adsetId] = { status: 'UNKNOWN', presupuesto: 0 };
         }
       } else {
-        adsetCache[batch[idx]] = { status: 'UNKNOWN', presupuesto: 0 };
+        const errorMsg = result ? `code=${result.code}` : 'result null';
+        Logger.log(`Error en batch request para adset ${adsetId}: ${errorMsg}`);
+        adsetCache[adsetId] = { status: 'UNKNOWN', presupuesto: 0 };
       }
     });
   }
 
   // Obtener estados de campaigns en batches de 50
+  Logger.log(`Procesando ${campaignsUnicos.length} campaigns únicos en batches de 50...`);
   for (let i = 0; i < campaignsUnicos.length; i += 50) {
     const batch = campaignsUnicos.slice(i, i + 50);
     const requests = batch.map(campaignId => ({
@@ -284,15 +302,19 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
     const results = ejecutarBatch(requests, token);
 
     results.forEach((result, idx) => {
+      const campaignId = batch[idx];
       if (result && result.code === 200) {
         try {
           const data = JSON.parse(result.body);
-          campaignCache[batch[idx]] = data.effective_status || 'UNKNOWN';
+          campaignCache[campaignId] = data.effective_status || 'UNKNOWN';
         } catch (e) {
-          campaignCache[batch[idx]] = 'UNKNOWN';
+          Logger.log(`Error parseando campaign ${campaignId}: ${e.message}`);
+          campaignCache[campaignId] = 'UNKNOWN';
         }
       } else {
-        campaignCache[batch[idx]] = 'UNKNOWN';
+        const errorMsg = result ? `code=${result.code}` : 'result null';
+        Logger.log(`Error en batch request para campaign ${campaignId}: ${errorMsg}`);
+        campaignCache[campaignId] = 'UNKNOWN';
       }
     });
   }
@@ -311,7 +333,7 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
   }
 
   // Enriquecer datos usando los caches
-  const datosEnriquecidos = datos.map(item => {
+  const datosEnriquecidos = datos.map((item, itemIndex) => {
     const adStatus = adCache[item.ad_id] || 'UNKNOWN';
     const adsetData = adsetCache[item.adset_id] || { status: 'UNKNOWN', presupuesto: 0 };
     const campaignStatus = campaignCache[item.campaign_id] || 'UNKNOWN';
@@ -319,10 +341,40 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
     // Extraer país del nombre de la campaña
     const pais = extraerPaisDeCampana(item.campaign_name);
 
-    // Determinar estado general
+    // Determinar estado general basado en la jerarquía de Meta Ads
+    // Un anuncio está "EN CIRCULACIÓN" solo si TODOS los niveles están ACTIVE
     let estadoGeneral = 'EN PAUSA';
     if (adStatus === 'ACTIVE' && adsetData.status === 'ACTIVE' && campaignStatus === 'ACTIVE') {
       estadoGeneral = 'EN CIRCULACIÓN';
+    } else if (adStatus === 'PAUSED' || adsetData.status === 'PAUSED' || campaignStatus === 'PAUSED') {
+      estadoGeneral = 'EN PAUSA';
+    } else if (adStatus === 'ARCHIVED' || adsetData.status === 'ARCHIVED' || campaignStatus === 'ARCHIVED') {
+      estadoGeneral = 'ARCHIVADO';
+    } else if (adStatus === 'DELETED' || adsetData.status === 'DELETED' || campaignStatus === 'DELETED') {
+      estadoGeneral = 'ELIMINADO';
+    }
+
+    // LOG: Primeros 5 items para debugging
+    if (itemIndex < 5) {
+      Logger.log(`Item ${itemIndex} - AD ID: ${item.ad_id}, Adset ID: ${item.adset_id}, Campaign ID: ${item.campaign_id}`);
+      Logger.log(`  Estados: ad=${adStatus}, adset=${adsetData.status}, campaign=${campaignStatus} => General: ${estadoGeneral}`);
+      Logger.log(`  Presupuesto: ${adsetData.presupuesto}`);
+    }
+
+    // LOG ESPECIAL: Si es el AD ID problemático 120239596191310402
+    if (item.ad_id === '120239596191310402') {
+      Logger.log(`🔍 AD PROBLEMÁTICO ENCONTRADO: ${item.ad_id}`);
+      Logger.log(`  Nombre campaña: ${item.campaign_name}`);
+      Logger.log(`  Nombre conjunto: ${item.adset_name}`);
+      Logger.log(`  Nombre anuncio: ${item.ad_name}`);
+      Logger.log(`  AD ID: ${item.ad_id}, Adset ID: ${item.adset_id}, Campaign ID: ${item.campaign_id}`);
+      Logger.log(`  Estados RAW del cache:`);
+      Logger.log(`    - adCache[${item.ad_id}] = ${adCache[item.ad_id]}`);
+      Logger.log(`    - adsetCache[${item.adset_id}] = ${JSON.stringify(adsetCache[item.adset_id])}`);
+      Logger.log(`    - campaignCache[${item.campaign_id}] = ${campaignCache[item.campaign_id]}`);
+      Logger.log(`  Estados procesados: ad=${adStatus}, adset=${adsetData.status}, campaign=${campaignStatus}`);
+      Logger.log(`  Estado general resultante: ${estadoGeneral}`);
+      Logger.log(`  Presupuesto: ${adsetData.presupuesto}`);
     }
 
     return {
@@ -337,6 +389,439 @@ function extraerDatosCompletoDeCuenta(accountId, token, timeParam, filtroProduct
   });
 
   return datosEnriquecidos;
+}
+
+/**
+ * Buscar AD ID específico en los datos ya extraídos (sin llamadas API)
+ */
+function buscarAdIdEnDatosExtraidos() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Preguntar qué AD ID buscar
+  const response = ui.prompt(
+    '🔍 Buscar AD ID',
+    'Ingresa el AD ID a buscar:',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+
+  const adIdBuscar = response.getResponseText().trim();
+  if (!adIdBuscar) {
+    ui.alert('❌ Error', 'Debes ingresar un AD ID.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Buscar en la hoja "📊 Todos los Rangos"
+  const hoja = ss.getSheetByName('📊 Todos los Rangos');
+  if (!hoja) {
+    ui.alert('❌ Error', 'No existe la hoja "📊 Todos los Rangos".\n\nPrimero ejecuta "Extraer TODOS los Rangos".', ui.ButtonSet.OK);
+    return;
+  }
+
+  const datos = hoja.getDataRange().getValues();
+  if (datos.length <= 1) {
+    ui.alert('❌ Error', 'La hoja "📊 Todos los Rangos" está vacía.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Headers
+  const headers = datos[0];
+  const adIdIndex = headers.indexOf('AD ID');
+  const estadoIndex = headers.indexOf('ESTADO');
+  const presupuestoIndex = headers.indexOf('PRESUPUESTO');
+
+  if (adIdIndex === -1) {
+    ui.alert('❌ Error', 'No se encontró la columna "AD ID" en la hoja.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Buscar todas las filas con ese AD ID
+  const filasEncontradas = [];
+  for (let i = 1; i < datos.length; i++) {
+    const row = datos[i];
+    if (row[adIdIndex] && row[adIdIndex].toString() === adIdBuscar) {
+      const filaObj = {};
+      headers.forEach((header, idx) => {
+        filaObj[header] = row[idx];
+      });
+      filasEncontradas.push({ fila: i + 1, datos: filaObj });
+    }
+  }
+
+  if (filasEncontradas.length === 0) {
+    ui.alert('❌ No Encontrado', `No se encontró el AD ID "${adIdBuscar}" en los datos extraídos.`, ui.ButtonSet.OK);
+    return;
+  }
+
+  // Crear hoja de resultados
+  let hojaResultado = ss.getSheetByName('🔎 Búsqueda AD ID');
+  if (!hojaResultado) hojaResultado = ss.insertSheet('🔎 Búsqueda AD ID');
+  hojaResultado.clear();
+
+  // Título
+  hojaResultado.getRange(1, 1, 1, 3)
+    .setValues([[`🔎 BÚSQUEDA AD ID: ${adIdBuscar}`, '', '']])
+    .setBackground('#1a73e8')
+    .setFontColor('white')
+    .setFontWeight('bold')
+    .setFontSize(12);
+  hojaResultado.getRange(1, 1, 1, 3).merge();
+
+  hojaResultado.getRange(2, 1, 1, 3)
+    .setValues([[`Encontrado en ${filasEncontradas.length} fila(s)`, '', '']])
+    .setBackground('#34a853')
+    .setFontColor('white')
+    .setFontWeight('bold');
+  hojaResultado.getRange(2, 1, 1, 3).merge();
+
+  let filaActual = 4;
+
+  // Mostrar cada fila encontrada
+  filasEncontradas.forEach((item, index) => {
+    const fila = item.datos;
+
+    hojaResultado.getRange(filaActual, 1, 1, 2)
+      .setValues([[`OCURRENCIA ${index + 1} (Fila ${item.fila})`, '']])
+      .setBackground('#fbbc04')
+      .setFontColor('black')
+      .setFontWeight('bold');
+    hojaResultado.getRange(filaActual, 1, 1, 2).merge();
+    filaActual++;
+
+    // Datos principales
+    const datosPrincipales = [
+      ['Campo', 'Valor'],
+      ['RANGO', fila['RANGO'] || 'N/A'],
+      ['CAMPAÑA', fila['CAMPAÑA'] || 'N/A'],
+      ['CONJUNTO', fila['CONJUNTO'] || 'N/A'],
+      ['ANUNCIO', fila['ANUNCIO'] || 'N/A'],
+      ['AD ID', fila['AD ID'] || 'N/A'],
+      ['PAÍS', fila['PAÍS'] || 'N/A'],
+      ['', ''],
+      ['⚠️ ESTADO', fila['ESTADO'] || 'N/A'],
+      ['⚠️ PRESUPUESTO', fila['PRESUPUESTO'] || 0],
+      ['', ''],
+      ['GASTO', fila['GASTO'] || 0],
+      ['GASTO TOTAL', fila['GASTO TOTAL'] || 0],
+      ['FACT USD', fila['FACT USD'] || 0],
+      ['IMPRESIONES', fila['IMPRESIONES'] || 0],
+      ['ALCANCE', fila['ALCANCE'] || 0],
+      ['CLICS ÚNICOS', fila['CLICS ÚNICOS'] || 0],
+      ['MENSAJES', fila['MENSAJES'] || 0]
+    ];
+
+    hojaResultado.getRange(filaActual, 1, datosPrincipales.length, 2).setValues(datosPrincipales);
+
+    // Resaltar los campos problemáticos
+    hojaResultado.getRange(filaActual + 8, 1, 1, 2).setBackground('#ea4335').setFontColor('white').setFontWeight('bold');
+    hojaResultado.getRange(filaActual + 9, 1, 1, 2).setBackground('#ea4335').setFontColor('white').setFontWeight('bold');
+
+    filaActual += datosPrincipales.length + 2;
+  });
+
+  // Formato general
+  hojaResultado.setColumnWidth(1, 200);
+  hojaResultado.setColumnWidth(2, 400);
+
+  ss.setActiveSheet(hojaResultado);
+  ss.toast(`Encontrado ${filasEncontradas.length} ocurrencia(s)`, '✅ Búsqueda Completada', 5);
+
+  // Mostrar resumen en alert
+  const primeraFila = filasEncontradas[0].datos;
+  const mensaje = `
+✅ AD ID ENCONTRADO: ${adIdBuscar}
+
+📊 Datos Extraídos:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Campaña: ${primeraFila['CAMPAÑA'] || 'N/A'}
+Conjunto: ${primeraFila['CONJUNTO'] || 'N/A'}
+Anuncio: ${primeraFila['ANUNCIO'] || 'N/A'}
+
+⚠️ CAMPOS PROBLEMÁTICOS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ESTADO: ${primeraFila['ESTADO'] || 'N/A'}
+PRESUPUESTO: $${primeraFila['PRESUPUESTO'] || 0}
+
+📈 Otras Métricas:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Gasto: $${primeraFila['GASTO'] || 0}
+Gasto Total: $${primeraFila['GASTO TOTAL'] || 0}
+Impresiones: ${primeraFila['IMPRESIONES'] || 0}
+Alcance: ${primeraFila['ALCANCE'] || 0}
+
+Encontrado en ${filasEncontradas.length} rango(s) de tiempo.
+Ver hoja "🔎 Búsqueda AD ID" para detalles completos.
+  `;
+
+  ui.alert('✅ AD ID Encontrado', mensaje, ui.ButtonSet.OK);
+}
+
+/**
+ * Función auxiliar para hacer fetch con reintentos en caso de rate limiting
+ */
+function fetchConReintentos(url, maxReintentos = 3, delayInicial = 5000) {
+  let ultimoError = null;
+
+  for (let intento = 1; intento <= maxReintentos; intento++) {
+    try {
+      const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      const responseCode = response.getResponseCode();
+      const responseText = response.getContentText();
+
+      // Si es exitoso, devolver la respuesta
+      if (responseCode === 200) {
+        return { success: true, response: response, data: JSON.parse(responseText) };
+      }
+
+      // Si es rate limiting, esperar y reintentar
+      if (responseCode === 400 || responseCode === 403) {
+        try {
+          const errorData = JSON.parse(responseText);
+          if (errorData.error && (errorData.error.code === 80004 || errorData.error.code === 17)) {
+            ultimoError = errorData;
+
+            if (intento < maxReintentos) {
+              const delay = delayInicial * intento; // Aumentar el delay con cada reintento
+              Logger.log(`Rate limiting detectado. Reintento ${intento}/${maxReintentos} en ${delay}ms...`);
+              SpreadsheetApp.getActiveSpreadsheet().toast(
+                `Rate limiting detectado. Esperando ${delay/1000}s antes de reintentar (${intento}/${maxReintentos})...`,
+                '⏳ Esperando',
+                -1
+              );
+              Utilities.sleep(delay);
+              continue;
+            }
+          }
+        } catch (e) {
+          // Si no se puede parsear el error, continuar con el flujo normal
+        }
+      }
+
+      // Para otros errores, devolver el error
+      return { success: false, response: response, error: responseText };
+
+    } catch (e) {
+      ultimoError = e;
+      if (intento < maxReintentos) {
+        Logger.log(`Error en intento ${intento}: ${e.message}. Reintentando...`);
+        Utilities.sleep(delayInicial * intento);
+      }
+    }
+  }
+
+  // Si todos los reintentos fallaron
+  return {
+    success: false,
+    error: ultimoError ? JSON.stringify(ultimoError) : 'Error desconocido después de ' + maxReintentos + ' intentos'
+  };
+}
+
+/**
+ * Función de prueba para diagnosticar un AD ID específico
+ * Extrae estado y presupuesto de todos los niveles (ad, adset, campaign)
+ */
+function probarExtraccionAdId120239596191310402() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const props = PropertiesService.getScriptProperties();
+
+  const token = props.getProperty('META_TOKEN');
+  if (!token) {
+    ui.alert('❌ Error', 'No hay token de Meta configurado.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const adIdPrueba = '120239596191310402';
+
+  ss.toast('Consultando AD ID: ' + adIdPrueba, '⏳ Procesando', -1);
+
+  try {
+    // Paso 1: Obtener información básica del anuncio incluyendo IDs de adset y campaign
+    const urlAd = `https://graph.facebook.com/v22.0/${adIdPrueba}?fields=id,name,effective_status,adset_id,campaign_id&access_token=${token}`;
+
+    ss.toast('Consultando información del anuncio...', '⏳ Paso 1/3', -1);
+    const resultAd = fetchConReintentos(urlAd);
+
+    if (!resultAd.success) {
+      const errorMsg = resultAd.error || 'Error desconocido';
+      let mensajeUsuario = 'No se pudo obtener información del AD ID.\n\n';
+
+      // Parsear el error si es posible
+      try {
+        const errorObj = typeof errorMsg === 'string' ? JSON.parse(errorMsg) : errorMsg;
+        if (errorObj.error) {
+          mensajeUsuario += `Error: ${errorObj.error.message}\n`;
+          mensajeUsuario += `Código: ${errorObj.error.code}\n`;
+          if (errorObj.error.error_subcode) {
+            mensajeUsuario += `Subcódigo: ${errorObj.error.error_subcode}\n`;
+          }
+
+          // Mensaje específico para rate limiting
+          if (errorObj.error.code === 80004 || errorObj.error.code === 17) {
+            mensajeUsuario += '\n⚠️ SOLUCIÓN:\n';
+            mensajeUsuario += '1. Espera 5-10 minutos antes de volver a intentar\n';
+            mensajeUsuario += '2. Reduce la frecuencia de extracciones\n';
+            mensajeUsuario += '3. Verifica si hay otros procesos ejecutándose\n';
+          }
+        } else {
+          mensajeUsuario += errorMsg;
+        }
+      } catch (e) {
+        mensajeUsuario += errorMsg;
+      }
+
+      ui.alert('❌ Error', mensajeUsuario, ui.ButtonSet.OK);
+      return;
+    }
+
+    const adData = resultAd.data;
+    Logger.log('Datos del Ad: ' + JSON.stringify(adData, null, 2));
+
+    const adsetId = adData.adset_id;
+    const campaignId = adData.campaign_id;
+
+    // Paso 2: Obtener información del adset (estado y presupuesto)
+    const urlAdset = `https://graph.facebook.com/v22.0/${adsetId}?fields=id,name,effective_status,daily_budget,lifetime_budget&access_token=${token}`;
+
+    ss.toast('Consultando información del conjunto de anuncios...', '⏳ Paso 2/3', -1);
+    const resultAdset = fetchConReintentos(urlAdset);
+
+    if (!resultAdset.success) {
+      ui.alert('❌ Error', 'No se pudo obtener información del Adset después de varios intentos.', ui.ButtonSet.OK);
+      return;
+    }
+
+    const adsetData = resultAdset.data;
+    Logger.log('Datos del Adset: ' + JSON.stringify(adsetData, null, 2));
+
+    // Calcular presupuesto
+    let presupuesto = 0;
+    let tipoPresupuesto = 'Sin presupuesto';
+    if (adsetData.daily_budget) {
+      presupuesto = parseFloat(adsetData.daily_budget) / 100;
+      tipoPresupuesto = 'Diario';
+    } else if (adsetData.lifetime_budget) {
+      presupuesto = parseFloat(adsetData.lifetime_budget) / 100;
+      tipoPresupuesto = 'Vitalicio';
+    }
+
+    // Paso 3: Obtener información de la campaña
+    const urlCampaign = `https://graph.facebook.com/v22.0/${campaignId}?fields=id,name,effective_status&access_token=${token}`;
+
+    ss.toast('Consultando información de la campaña...', '⏳ Paso 3/3', -1);
+    const resultCampaign = fetchConReintentos(urlCampaign);
+
+    if (!resultCampaign.success) {
+      ui.alert('❌ Error', 'No se pudo obtener información de la Campaña después de varios intentos.', ui.ButtonSet.OK);
+      return;
+    }
+
+    const campaignData = resultCampaign.data;
+    Logger.log('Datos de la Campaign: ' + JSON.stringify(campaignData, null, 2));
+
+    // Determinar estado general
+    let estadoGeneral = 'EN PAUSA';
+    if (adData.effective_status === 'ACTIVE' && adsetData.effective_status === 'ACTIVE' && campaignData.effective_status === 'ACTIVE') {
+      estadoGeneral = 'EN CIRCULACIÓN';
+    }
+
+    // Crear hoja de resultados
+    let hoja = ss.getSheetByName('🔬 Prueba AD ID');
+    if (!hoja) hoja = ss.insertSheet('🔬 Prueba AD ID');
+    hoja.clear();
+
+    // Título
+    hoja.getRange(1, 1, 1, 2)
+        .setValues([['🔬 PRUEBA DE EXTRACCIÓN - AD ID', adIdPrueba]])
+        .setBackground('#1a73e8')
+        .setFontColor('white')
+        .setFontWeight('bold')
+        .setFontSize(12);
+    hoja.getRange(1, 1, 1, 2).merge();
+
+    // Sección: Información del Anuncio
+    const datosTabla = [
+      ['', ''],
+      ['NIVEL', 'ANUNCIO (AD)'],
+      ['ID', adData.id],
+      ['Nombre', adData.name],
+      ['Estado', adData.effective_status],
+      ['', ''],
+      ['NIVEL', 'CONJUNTO DE ANUNCIOS (ADSET)'],
+      ['ID', adsetData.id],
+      ['Nombre', adsetData.name],
+      ['Estado', adsetData.effective_status],
+      ['Daily Budget (raw)', adsetData.daily_budget || 'N/A'],
+      ['Lifetime Budget (raw)', adsetData.lifetime_budget || 'N/A'],
+      ['Presupuesto Calculado', presupuesto],
+      ['Tipo de Presupuesto', tipoPresupuesto],
+      ['', ''],
+      ['NIVEL', 'CAMPAÑA (CAMPAIGN)'],
+      ['ID', campaignData.id],
+      ['Nombre', campaignData.name],
+      ['Estado', campaignData.effective_status],
+      ['', ''],
+      ['RESULTADO FINAL', ''],
+      ['Estado General', estadoGeneral],
+      ['Presupuesto Final', presupuesto],
+      ['', ''],
+      ['DIAGNÓSTICO', ''],
+      ['Anuncio ACTIVE?', adData.effective_status === 'ACTIVE' ? '✅ SÍ' : '❌ NO - Estado: ' + adData.effective_status],
+      ['Adset ACTIVE?', adsetData.effective_status === 'ACTIVE' ? '✅ SÍ' : '❌ NO - Estado: ' + adsetData.effective_status],
+      ['Campaign ACTIVE?', campaignData.effective_status === 'ACTIVE' ? '✅ SÍ' : '❌ NO - Estado: ' + campaignData.effective_status],
+      ['¿Tiene presupuesto?', presupuesto > 0 ? '✅ SÍ - $' + presupuesto : '❌ NO - Presupuesto: 0']
+    ];
+
+    hoja.getRange(2, 1, datosTabla.length, 2).setValues(datosTabla);
+
+    // Formato
+    hoja.getRange('A3:B3').setBackground('#34a853').setFontColor('white').setFontWeight('bold');
+    hoja.getRange('A8:B8').setBackground('#34a853').setFontColor('white').setFontWeight('bold');
+    hoja.getRange('A17:B17').setBackground('#34a853').setFontColor('white').setFontWeight('bold');
+    hoja.getRange('A22:B22').setBackground('#fbbc04').setFontColor('black').setFontWeight('bold');
+    hoja.getRange('A26:B26').setBackground('#ea4335').setFontColor('white').setFontWeight('bold');
+
+    hoja.setColumnWidth(1, 250);
+    hoja.setColumnWidth(2, 400);
+
+    hoja.getRange('A1:B' + (datosTabla.length + 1)).setBorder(true, true, true, true, true, true);
+
+    ss.setActiveSheet(hoja);
+    ss.toast('Prueba completada. Ver hoja: 🔬 Prueba AD ID', '✅ Completado', 5);
+
+    // Mostrar resumen en alert
+    const mensaje = `
+ANUNCIO (AD):
+• ID: ${adData.id}
+• Nombre: ${adData.name}
+• Estado: ${adData.effective_status}
+
+CONJUNTO (ADSET):
+• ID: ${adsetData.id}
+• Nombre: ${adsetData.name}
+• Estado: ${adsetData.effective_status}
+• Presupuesto: $${presupuesto} (${tipoPresupuesto})
+
+CAMPAÑA (CAMPAIGN):
+• ID: ${campaignData.id}
+• Nombre: ${campaignData.name}
+• Estado: ${campaignData.effective_status}
+
+RESULTADO:
+• Estado General: ${estadoGeneral}
+• Presupuesto: $${presupuesto}
+
+Ver hoja "🔬 Prueba AD ID" para detalles completos.
+    `;
+
+    ui.alert('✅ Prueba Completada', mensaje, ui.ButtonSet.OK);
+
+  } catch (e) {
+    Logger.log('Error en prueba: ' + e.message + '\nStack: ' + e.stack);
+    ui.alert('❌ Error', 'Error al ejecutar la prueba:\n\n' + e.message, ui.ButtonSet.OK);
+  }
 }
 
 /**
@@ -692,90 +1177,6 @@ function extraerTodosLosRangos() {
     // Agregar filtro automático en las cabeceras
     const rangoFiltro = hoja.getRange(1, 1, todosLosResultados.length + 1, headers.length);
     rangoFiltro.createFilter();
-
-    // Agregar fila de TOTAL GENERAL que se actualiza automáticamente con filtros
-    // Esta fila usa SUBTOTAL() que solo suma filas visibles
-    const filaTotal = todosLosResultados.length + 2;
-    const primeraFilaDatos = 2;
-    const ultimaFilaDatos = todosLosResultados.length + 1;
-
-    // Fórmulas SUBTOTAL (109 = SUM excluyendo filas ocultas y filtradas)
-    const formulaPresupuesto = `=SUBTOTAL(109,I${primeraFilaDatos}:I${ultimaFilaDatos})`;
-    const formulaGasto = `=SUBTOTAL(109,J${primeraFilaDatos}:J${ultimaFilaDatos})`;
-    const formulaIGV = `=SUBTOTAL(109,K${primeraFilaDatos}:K${ultimaFilaDatos})`;
-    const formulaGastoTotal = `=SUBTOTAL(109,L${primeraFilaDatos}:L${ultimaFilaDatos})`;
-    const formulaFactUSD = `=SUBTOTAL(109,M${primeraFilaDatos}:M${ultimaFilaDatos})`;
-    const formulaROAS = `=IF(L${filaTotal}>0,M${filaTotal}/L${filaTotal},0)`;
-    const formulaUtilidad = `=SUBTOTAL(109,O${primeraFilaDatos}:O${ultimaFilaDatos})`;
-    const formulaROI = `=IF(L${filaTotal}>0,O${filaTotal}/L${filaTotal},0)`;
-    const formulaImpresiones = `=SUBTOTAL(109,Q${primeraFilaDatos}:Q${ultimaFilaDatos})`;
-    const formulaAlcance = `=SUBTOTAL(109,R${primeraFilaDatos}:R${ultimaFilaDatos})`;
-    const formulaClicsUnicos = `=SUBTOTAL(109,S${primeraFilaDatos}:S${ultimaFilaDatos})`;
-    const formulaCostoPorClic = `=IF(S${filaTotal}>0,L${filaTotal}/S${filaTotal},0)`;
-    const formulaMensajes = `=SUBTOTAL(109,U${primeraFilaDatos}:U${ultimaFilaDatos})`;
-    const formulaPorcentajeMensajes = `=IF(S${filaTotal}>0,U${filaTotal}/S${filaTotal},0)`;
-    const formulaCostoPorMensaje = `=IF(U${filaTotal}>0,L${filaTotal}/U${filaTotal},0)`;
-    const formulaVentas = `=SUBTOTAL(109,X${primeraFilaDatos}:X${ultimaFilaDatos})`;
-    const formulaCVR = `=IF(U${filaTotal}>0,X${filaTotal}/U${filaTotal},0)`;
-    const formulaCostoPorCompra = `=IF(X${filaTotal}>0,L${filaTotal}/X${filaTotal},0)`;
-    const formulaCPM = `=IF(Q${filaTotal}>0,(J${filaTotal}/Q${filaTotal})*1000,0)`;
-
-    hoja.getRange(filaTotal, 1, 1, headers.length).setValues([[
-      '',
-      'TOTAL GENERAL',
-      '(se actualiza automáticamente al filtrar)',
-      '', '', '', '', '',
-      formulaPresupuesto,
-      formulaGasto,
-      formulaIGV,
-      formulaGastoTotal,
-      formulaFactUSD,
-      formulaROAS,
-      formulaUtilidad,
-      formulaROI,
-      formulaImpresiones,
-      formulaAlcance,
-      formulaClicsUnicos,
-      formulaCostoPorClic,
-      formulaMensajes,
-      formulaPorcentajeMensajes,
-      formulaCostoPorMensaje,
-      formulaVentas,
-      formulaCVR,
-      formulaCostoPorCompra,
-      formulaCPM,
-      ''
-    ]]);
-
-    // Formatear fila de total
-    const rangoTotal = hoja.getRange(filaTotal, 1, 1, headers.length);
-    rangoTotal.setBackground('#00695c')
-              .setFontColor('white')
-              .setFontWeight('bold')
-              .setBorder(true, true, true, true, null, null, 'white', SpreadsheetApp.BorderStyle.SOLID_THICK);
-
-    hoja.getRange(filaTotal, 9).setNumberFormat('$#,##0.00');   // PRESUPUESTO
-    hoja.getRange(filaTotal, 10).setNumberFormat('$#,##0.00');  // GASTO
-    hoja.getRange(filaTotal, 11).setNumberFormat('$#,##0.00');  // IGV
-    hoja.getRange(filaTotal, 12).setNumberFormat('$#,##0.00');  // GASTO TOTAL
-    hoja.getRange(filaTotal, 13).setNumberFormat('$#,##0.00');  // FACT USD
-    hoja.getRange(filaTotal, 14).setNumberFormat('0.00');       // ROAS
-    hoja.getRange(filaTotal, 15).setNumberFormat('$#,##0.00');  // UTILIDAD
-    hoja.getRange(filaTotal, 16).setNumberFormat('0.00%');      // ROI
-    hoja.getRange(filaTotal, 17).setNumberFormat('#,##0');      // IMPRESIONES
-    hoja.getRange(filaTotal, 18).setNumberFormat('#,##0');      // ALCANCE
-    hoja.getRange(filaTotal, 19).setNumberFormat('#,##0');      // CLICS ÚNICOS
-    hoja.getRange(filaTotal, 20).setNumberFormat('$#,##0.00');  // COSTO POR CLIC
-    hoja.getRange(filaTotal, 21).setNumberFormat('#,##0');      // MENSAJES
-    hoja.getRange(filaTotal, 22).setNumberFormat('0.00%');      // % MENSAJES
-    hoja.getRange(filaTotal, 23).setNumberFormat('$#,##0.00');  // COSTO POR MENSAJE
-    hoja.getRange(filaTotal, 24).setNumberFormat('#,##0');      // # VENTAS
-    hoja.getRange(filaTotal, 25).setNumberFormat('0.00%');      // CVR
-    hoja.getRange(filaTotal, 26).setNumberFormat('$#,##0.00');  // COSTO POR COMPRA
-    hoja.getRange(filaTotal, 27).setNumberFormat('$#,##0.00');  // CPM
-
-    // Ocultar la columna TIPO (opcional, el usuario puede filtrar por ella)
-    // hoja.hideColumns(1);
 
     hoja.autoResizeColumns(1, headers.length);
     hoja.setColumnWidth(1, 60); // Columna TIPO más angosta
